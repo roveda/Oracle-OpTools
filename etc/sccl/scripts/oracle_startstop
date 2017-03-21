@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# oracle_startstop
+#
+# ---------------------------------------------------------
+# Copyright 2017, roveda
+#
+# This file is part of the 'Oracle OpTools'.
+#
+# The 'Oracle OpTools' is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# The 'Oracle OpTools' is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with the 'Oracle OpTools'. If not, see <http://www.gnu.org/licenses/>.
+#
+# ---------------------------------------------------------
+# Synopsis:
+#   oracle_startstop {start|stop}  <oracle_environment_script>  {<listener_name>|DEFAULT|NONE}  [ABORT]
+#
+# ---------------------------------------------------------
+# Description:
+#
+#   Start-Stop script for SCCL resource to start or stop an Oracle database instance.
+#
+#   { start | stop }:
+#     start or stop the Oracle database instance.
+#
+#   <oracle_environment_script>:
+#     The script that contains all the Oracle relevant environment settings
+#     like ORACLE_HOME and ORACLE_SID for the database instance that is to be started.
+#
+#   { <listener_name> | DEFAULT | NONE }:
+#     Specifies the listener to be started, 
+#     or the DEFAULT one ("listener"),
+#     or no listener at all (NONE).
+#
+#   ABORT (optional):
+#     For "stop" only: use "shutdown abort" instead of the default "shutdown immediate"
+#     when stopping the Oracle database instance.
+#
+#   Send any hints, wishes or bug reports to:
+#     roveda at universal-logging-system.org
+#
+# ---------------------------------------------------------
+# Options:
+#
+# ---------------------------------------------------------
+# Restrictions:
+#
+# ---------------------------------------------------------
+# Dependencies:
+#
+# ---------------------------------------------------------
+# Disclaimer:
+#   The script has been tested and appears to work as intended,
+#   but there is no guarantee that it behaves as YOU expect.
+#   You should always run new scripts on a test instance initially.
+#
+# ---------------------------------------------------------
+#
+# 2016-02-18 roveda: changed from sudo to su, works on more flavours of Linux
+# 2016-07-01 roveda: command line arguments added.
+# 2017-01-13 roveda: Command line parameters changed.
+#
+# -------------------------------------------------------------------
+
+USAGE="oracle_startstop {start|stop}  <oracle_environment_script>  {<listener_name>|DEFAULT|NONE}  [ABORT]"
+
+if [[ $# -lt 3 ]] ; then
+  echo "Improper number of parameters => ABORT"
+  echo "$USAGE"
+  exit 1
+fi
+
+# Get some arguments here
+# {start|stop}
+START_STOP=$1
+
+# <oracle_environment_script>
+ORAENV="$2"
+
+# {<listener_name>|DEFAULT|NONE}
+LISTENER="$3"
+
+# If present, only for "stop"
+# [ABORT]
+ABORT="$4"
+ABORT=$(echo "$ABORT" | awk '{print toupper($0)}' )
+
+# -----
+# Go to directory where this script is placed
+cd `dirname $0`
+
+unset LC_ALL
+export LANG=C
+
+case $START_STOP in
+
+  start)
+    su - oracle -c "/usr/share/oracle_optools/instance_start.sh \"$ORAENV\" \"$LISTENER\""
+    exit $?
+    ;;
+
+  stop)
+    su - oracle -c "/usr/share/oracle_optools/instance_stop.sh \"$ORAENV\" \"$LISTENER\" \"$ABORT\"" 
+    exit $?
+    ;;
+
+  *)
+    echo "$USAGE"
+    exit 1
+    ;;
+esac
+
+
