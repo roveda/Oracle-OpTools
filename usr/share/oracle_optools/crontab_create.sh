@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# crontab_create.sh  <oracle_environment_script> [--silent]
+# crontab_create.sh - create a default crontab file for the Oracle OpTools
 #
 # ---------------------------------------------------------
-# Copyright 2016, roveda
+# Copyright 2017, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -87,6 +87,11 @@
 #
 # 2017-03-02      roveda      0.11
 #   Changed comments in crontab
+#
+# 2017-05-29      roveda      0.12
+#   Changed housekeeping from 22:00 to 03:00. DB-info report and AWR report will
+#   therefor appear under 'today' in ULS which is the default. An explicit 
+#   change to 'yesterday' was necessary previously. 
 #
 # -----------------------------------------------------------------------------
 
@@ -199,8 +204,8 @@ cat << EOF > $CRONFILE
 01 * * * * oracle /usr/share/oracle_optools/hourly.sh $ORAENV > /var/tmp/oracle_optools/${ORACLE_SID}/hourly.log 2>&1
 #
 # -----
-# Nightly jobs at 22:01 (removal of trace files, statspack and/or AWR reports, housekeeping)
-01 22 * * * oracle /usr/share/oracle_optools/nightly.sh $ORAENV > /var/tmp/oracle_optools/${ORACLE_SID}/nightly.log 2>&1
+# Nightly jobs at 03:01 (removal of trace files, statspack and/or AWR reports, DB info report, housekeeping)
+01 03 * * * oracle /usr/share/oracle_optools/nightly.sh $ORAENV > /var/tmp/oracle_optools/${ORACLE_SID}/nightly.log 2>&1
 #
 # -----
 # Hourly backup of redo logs

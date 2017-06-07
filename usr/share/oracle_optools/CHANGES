@@ -5,6 +5,12 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2017-06-01, roveda
+  Changed the header of crontab_create.sh
+
+2017-04-04, roveda
+  Merged the NLS parameters into one table in ora_dbinfo.pl.
+
 2017-03-20, roveda
   Fixed ora_housekeeping.pl: the age in 'purge -age' must be minutes, 
   now the number of days are recalculated to minutes.

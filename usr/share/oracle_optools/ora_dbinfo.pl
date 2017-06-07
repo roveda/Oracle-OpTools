@@ -166,6 +166,9 @@
 # 2017-03-21      roveda      0.27
 #   Fixed the broken support of sid specific configuration file.
 #
+# 2017-04-04      roveda      0.28
+#   Merged the NLS parameters into one table.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -183,7 +186,7 @@ use Misc 0.40;
 use Uls2 1.15;
 use HtmlDocument;
 
-my $VERSION = 0.27;
+my $VERSION = 0.28;
 
 # ===================================================================
 # The "global" variables
@@ -1950,12 +1953,17 @@ sub part_2 {
   $HtmlReport->add_goto_top("top");
 
   # -----
-  # NLS database settings
+  # database and instance NLS parameters
 
+  # Use concatenation to avoid the substitution question
   $sql = "
-    select parameter, value
-    from nls_database_parameters
-    order by parameter;
+    SELECT
+       db.parameter as parameter,
+       nvl(db.value, '&' || 'nbsp;') as database_value,
+       nvl(i.value, '&' || 'nbsp;') as instance_value
+    FROM nls_database_parameters db
+    LEFT JOIN nls_instance_parameters i ON i.parameter = db.parameter
+    ORDER BY parameter;
   ";
 
   if (! do_sql($sql)) {return(0)}
@@ -1964,60 +1972,13 @@ sub part_2 {
   get_value_lines(\@L, $TMPOUT1);
 
   # Insert title
-  unshift(@L, "parameter  $DELIM  value");
+  unshift(@L, "NLS PARAMETER  $DELIM  NLS_DATABASE_PARAMETERS   $DELIM   NLS_INSTANCE_PARAMETERS");
 
-  $HtmlReport->add_heading(2, "NLS Database Parameters", "_default_");
-  $HtmlReport->add_paragraph('p', "NLS_DATABASE_PARAMETERS shows the initially defined values of the NLS parameters for the database. These are fixed at the database level and cannot be changed, some can be overridden by NLS_INSTANCE_PARAMETERS. NLS_CHARACTERSET and NLS_NCHAR_CHARACTERSET can NOT be changed, though!");
-  $HtmlReport->add_table(\@L, $DELIM, "LL", 1);
+  $HtmlReport->add_heading(2, "NLS Database and Instance Parameters", "_default_");
+  $HtmlReport->add_paragraph('p', "NLS_DATABASE_PARAMETERS show the initially defined values of the NLS parameters for the database. These are fixed at the database level and cannot be changed, some can be overridden by NLS_INSTANCE_PARAMETERS. NLS_CHARACTERSET and NLS_NCHAR_CHARACTERSET can NOT be changed, though!");
+  $HtmlReport->add_paragraph('p', "NLS_INSTANCE_PARAMETERS show the current NLS instance parameters that have been explicitly set to override the invariable NLS_DATABASE_PARAMETERS. This is the base from which the NLS_SESSION_PARAMETRS are derived (the effective parameters for the user session). Note that enviroment variables like NLS_LANG which can be effective in a user session do overwrite the NLS_INSTANCE_PARAMETERS.");
+  $HtmlReport->add_table(\@L, $DELIM, "LLL", 1);
   $HtmlReport->add_goto_top("top");
-
-  # -----
-  # NLS instance settings
-
-  $sql = "
-    select parameter, nvl(value, '-')
-    from nls_instance_parameters
-    order by parameter;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  @L = ();
-  get_value_lines(\@L, $TMPOUT1);
-
-  # Insert title
-  unshift(@L, "parameter  $DELIM  value");
-
-  $HtmlReport->add_heading(2, "NLS Instance Parameters", "_default_");
-  $HtmlReport->add_paragraph('p', "NLS_INSTANCE_PARAMETERS shows the current NLS instance parameters that have been explicitly set to override the invariable NLS_DATABASE_PARAMETERS.");
-  $HtmlReport->add_table(\@L, $DELIM, "LL", 1);
-  $HtmlReport->add_goto_top("top");
-
-  # -----
-  # current NLS settings
-  #
-  # These values reflect the current settings for the session
-  # and is possibly influenced by environment variable settings.
-  # That is not relevant as a database information.
-  #
-  # $sql = "
-  #   select parameter, nvl(value, '-')
-  #   from V\$NLS_PARAMETERS
-  #   order by parameter;
-  # ";
-  #
-  # if (! do_sql($sql)) {return(0)}
-  #
-  # @L = ();
-  # get_value_lines(\@L, $TMPOUT1);
-  #
-  # # Insert title
-  # unshift(@L, "parameter  $DELIM  value");
-  #
-  # $HtmlReport->add_heading(2, "Current NLS Parameters", "_default_");
-  # $HtmlReport->add_paragraph('p', "V$NLS_PARAMETERS shows current values of the effective NLS parameters");
-  # $HtmlReport->add_table(\@L, $DELIM, "LL", 1);
-  # $HtmlReport->add_goto_top("top");
 
 } # part_2
 
