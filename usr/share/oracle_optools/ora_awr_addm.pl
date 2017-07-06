@@ -103,6 +103,10 @@
 #   Fixed a writing mistake.
 #   Fixed the broken support of sid specific configuration file.
 #
+# 2017-07-06      roveda      0.15
+#   Now creating an error message file which is compressed and sent 
+#   to ULS in case of an error during script execution.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -117,10 +121,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.41;
+use Uls2 1.16;
 
-my $VERSION = 0.14;
+my $VERSION = 0.15;
 
 # ===================================================================
 # The "global" variables
@@ -138,6 +142,8 @@ my @TEMPFILES;
 # Temporary file for SQL execution
 my $TMPOUT1;
 my $LOCKFILE;
+my $ERROUTFILE;
+
 my $DELIM = "!";
 
 # This hash keeps the command line arguments
@@ -176,9 +182,6 @@ my $VERY_SMALL = 1E-60;
 # <hostname> - "Oracle Database Server [xxxx]" - __watch_oracle9.pl - message
 my $MSG = "OK";
 
-# Final numerical value, 0 if MSG = "OK", 1 if MSG contains any other value
-my $EXIT_VALUE = 0;
-
 # This hash keeps the documentation for the teststeps.
 my %TESTSTEP_DOC;
 
@@ -207,25 +210,87 @@ sub signal_handler {
 
   output_error_message("$CURRPROG: Signal $_[0] catched! Clean up and abort script.");
 
-  clean_up(@TEMPFILES, $LOCKFILE);
+  clean_up(@TEMPFILES);
 
   uls_timing($IDENTIFIER, "start-stop", "stop");
   uls_flush(\%ULS);
 
+  clean_up($ERROUTFILE, $LOCKFILE);
+
   exit(9);
 }
+
+------------------------------------------------------------
+sub end_script {
+  # end_script(<exit_value>);
+
+  uls_value($IDENTIFIER, "message", $MSG, " ");
+
+  # -----
+  # Is there an error message file?
+  if (-r $ERROUTFILE ) {
+
+    my $uls_filename = "error_message_file.log";
+
+    # Try to compress the file.
+    if (my $new_ext = try_to_compress($ERROUTFILE)) {
+      $ERROUTFILE .= $new_ext;
+      $uls_filename .= $new_ext;
+    }
+
+    # Send the error message file
+    uls_file({
+      teststep  => "$IDENTIFIER"
+     ,detail    => "error message file"
+     ,filename  => $ERROUTFILE
+     ,rename_to => $uls_filename
+    });
+
+  }
+
+  # -----
+  # The following errors are lost!
+  # But the output_error_message() is not used there anyway.
+
+  send_runtime($start_secs);
+  uls_timing($IDENTIFIER, "start-stop", "stop");
+
+  uls_flush(\%ULS);
+
+  clean_up(@TEMPFILES, $ERROUTFILE, $LOCKFILE);
+
+  exit($_[0]);
+
+} # end_script
+
 
 # ------------------------------------------------------------
 sub output_error_message {
   # output_error_message(<message>)
   #
   # Send the given message(s), set the $MSG variable and
-  # print out the message.
+  # print out the message to STDERR and to an error message file.
 
-  $EXIT_VALUE = 1;
   $MSG = "ERROR";
+
   foreach my $msg (@_) { print STDERR "$msg\n" }
-  foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
+  # foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
+
+  # Write all error messages to a file.
+  if (! open(my $erroutfile, ">>:utf8", $ERROUTFILE)) {
+    print STDERR sub_name() . ": Error: Cannot open '$ERROUTFILE' for writing!\n";
+    return(1);
+  }
+
+  foreach my $msg (@_) { print $erroutfile "$V\n" }
+
+  # Close file
+  if (! close($erroutfile)) {
+    print STDERR sub_name() . ": Error: Cannot close '$ERROUTFILE'!\n";
+    return(1);
+  }
+
+  return(0);
 
 } # output_error_message
 
@@ -430,7 +495,7 @@ sub clean_up {
     if (-e $f) {
       print "Removing file '$f' ...";
       if (unlink($f)) {print "Done.\n"}
-      else {print "Failed.\n"}
+      else {print STDERR "Removing of file '$f' has failed! $!\n"}
     }
   }
 
@@ -1220,6 +1285,10 @@ $TMPOUT1 = "${WORKFILEPREFIX}_1.tmp";
 print "TMPOUT1=$TMPOUT1\n";
 push(@TEMPFILES, $TMPOUT1);
 
+$ERROUTFILE = "${WORKFILEPREFIX}_errout.log";
+print "ERROUTFILE=$ERROUTFILE\n";
+# push(@TEMPFILES, $ERROUTFILE);
+
 print "DELIM=$DELIM\n";
 
 # ----- general info ----
@@ -1230,11 +1299,7 @@ if (! general_info()) {
 
   output_error_message("$CURRPROG: Error: A fatal error has ocurred! Aborting script.");
 
-  clean_up();
-  send_runtime($start_secs);
-  uls_timing($IDENTIFIER, "start-stop", "stop");
-  uls_flush(\%ULS);
-  exit(1);
+  end_script(1);
 }
 
 generate_reports();
@@ -1244,25 +1309,15 @@ generate_reports();
 # The real work ends here.
 # -------------------------------------------------------------------
 
-# Any errors will have sent already its error messages.
-uls_value($IDENTIFIER, "message", $MSG, " ");
-# uls_value($IDENTIFIER, "exit value", $EXIT_VALUE, "#");
-
 send_doc($CURRPROG, $IDENTIFIER);
 
-send_runtime($start_secs);
-uls_timing($IDENTIFIER, "start-stop", "stop");
+if ($MSG eq "OK") {end_script(0)}
 
-uls_flush(\%ULS);
+end_script(1);
 
-# -------------------------------------------------------------------
-clean_up(@TEMPFILES, $LOCKFILE);
-
-title("END");
-
-if ($MSG eq "OK") {exit(0)}
-else {exit(1)}
-
+# -----
+# Script should never arrive here.
+exit(255);
 
 #########################
 # end of script

@@ -111,6 +111,9 @@
 # 2017-03-21      roveda      0.15
 #   Fixed the broken support of sid specific configuration file.
 #
+# 2017-06-19      roveda      0.16
+#   Ignoring temporary compression advisor tables when granting privilges.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -128,7 +131,7 @@ use lib ".";
 use Misc 0.40;
 use Uls2 1.15;
 
-my $VERSION = 0.15;
+my $VERSION = 0.16;
 
 # ===================================================================
 # The "global" variables
@@ -601,7 +604,12 @@ sub grant_object_rights {
   my $sql = "";
 
   foreach my $dbo ( (split(",", $schema_objects)) ) {
-    $sql .= "grant $grants on $grantor.$dbo to $grantees;\n";
+    # Exclude temporary Compression Advisor tables like CMP3$123456
+    if ($dbo !~ /^CMP\d{1}\$\d{3,}/) {
+      $sql .= "grant $grants on $grantor.$dbo to $grantees;\n";
+    } else {
+      print "Info: Leaving out object $grantor.$dbo, it is a compression advisor table.\n";
+    }
   } # foreach
 
   # print "SQL=\n";

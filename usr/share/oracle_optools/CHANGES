@@ -5,6 +5,9 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2017-06-19, roveda
+  ora_grants.pl: Ignoring temporary compression advisor tables when granting privilges.
+
 2017-06-01, roveda
   Changed the header of crontab_create.sh
 

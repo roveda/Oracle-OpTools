@@ -7,22 +7,22 @@
 #   are generally used in (my) perl scripts.
 # 
 # ---------------------------------------------------------
-# Copyright 2004-2016, roveda
+# Copyright 2004-2017, roveda
 #
-# This file is part of the 'Oracle OpTools'.
+# This file is part of the 'ULS Client for Oracle'.
 #
-# The 'Oracle OpTools' is free software: you can redistribute it and/or modify
+# The 'ULS Client for Oracle' is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# The 'Oracle OpTools' is distributed in the hope that it will be useful,
+# The 'ULS Client for Oracle' is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with the 'Oracle OpTools'.  If not, see <http://www.gnu.org/licenses/>.
+# along with the 'ULS Client for Oracle'.  If not, see <http://www.gnu.org/licenses/>.
 #
 # 
 # ---------------------------------------------------------
@@ -183,6 +183,12 @@
 # 2016-07-06, 0.40, roveda:
 #   Made bytes2gb() safe for negative or zero value arguments.
 #
+# 2017-06-25, 0.41, roveda:
+#   And local_tz_offset() that returns the number of seconds between local 
+#   time of current script envirionment and GMT.
+#   Added tz() that returns the timezone as {+|-}hh:mm for a number of seconds.
+#   Removed log10() as it is contained in POSIX.
+#
 # ============================================================
 
 use strict;
@@ -194,15 +200,16 @@ package Misc;
 # use 5.6.0;
 use Time::Local;
 use Config::IniFiles;
+use POSIX;
 
 
 our(@ISA, @EXPORT, $VERSION);
 require Exporter;
 @ISA = qw(Exporter);
 
-@EXPORT = qw(args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs lockfile_build log10 make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim);
+@EXPORT = qw(args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs local_tz_offset lockfile_build make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim tz);
 
-$VERSION = 0.40;
+$VERSION = 0.41;
 
 # This one is used as timestamp marker in work files.
 my $TIMESTAMP_TXT = "T_I_M_E_S_T_A_M_P";
@@ -379,13 +386,6 @@ sub bytes2gb {
 
 } # bytes2gb
 
-
-
-# ------------------------------------------------------------
-sub log10 {
-  my $n = shift;
-  return log($n)/log(10);
-} # log10
 
 
 # ------------------------------------------------------------
@@ -2226,6 +2226,41 @@ sub fif {
   }
 
 }  # fif
+
+
+# -------------------------------------------------------------------
+sub local_tz_offset {
+  # Returns the difference of the number of seconds between
+  # local time and UTC (GMT/Zulu). For the current environment.
+  # (needs POSIX)
+
+  my $t = time();
+  my $utc = mktime(gmtime($t));
+  my @tmlocal = localtime($t);
+
+  # force dst off, timezone specific
+  $tmlocal[8] = 0;
+  my $local = mktime(@tmlocal);
+
+  return ($local - $utc);
+} # local_tz_offset
+
+
+# -------------------------------------------------------------------
+sub tz {
+  # Format a number of seconds to the timezone
+  # {+|-}hh:mm
+  # Always including plus or minus.
+
+  my ($tzoffset) = @_;
+  my $z = '+';
+  if ($tzoffset < 0) { $z = '-' }
+  $tzoffset = abs($tzoffset);
+  my $hours = floor($tzoffset / 60 / 60);
+  my $minutes = $tzoffset - $hours * 60 * 60;
+  $z .= sprintf('%02d:%02d', $hours, $minutes);
+  return $z;
+} # tz
 
 
 
