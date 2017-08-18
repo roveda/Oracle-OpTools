@@ -131,6 +131,8 @@ my $VERSION = 0.15;
 # ===================================================================
 
 my $CURRPROG;  # Keeps the name of this script.
+# Timestamp of script start is seconds
+my $STARTSECS = time;
 
 # The default command to execute sql commands.
 my $SQLPLUS_COMMAND = 'sqlplus -S "/ as sysdba"';
@@ -208,19 +210,14 @@ sub signal_handler {
 
   title(sub_name());
 
+  $MSG = "SIGNAL " . $_[0];
+
   output_error_message("$CURRPROG: Signal $_[0] catched! Clean up and abort script.");
 
-  clean_up(@TEMPFILES);
-
-  uls_timing($IDENTIFIER, "start-stop", "stop");
-  uls_flush(\%ULS);
-
-  clean_up($ERROUTFILE, $LOCKFILE);
-
-  exit(9);
+  end_script(9);
 }
 
-------------------------------------------------------------
+# ------------------------------------------------------------
 sub end_script {
   # end_script(<exit_value>);
 
@@ -252,7 +249,7 @@ sub end_script {
   # The following errors are lost!
   # But the output_error_message() is not used there anyway.
 
-  send_runtime($start_secs);
+  send_runtime($STARTSECS);
   uls_timing($IDENTIFIER, "start-stop", "stop");
 
   uls_flush(\%ULS);
@@ -277,12 +274,13 @@ sub output_error_message {
   # foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
 
   # Write all error messages to a file.
-  if (! open(my $erroutfile, ">>:utf8", $ERROUTFILE)) {
+  my $erroutfile;
+  if (! open($erroutfile, ">>:utf8", $ERROUTFILE)) {
     print STDERR sub_name() . ": Error: Cannot open '$ERROUTFILE' for writing!\n";
     return(1);
   }
 
-  foreach my $msg (@_) { print $erroutfile "$V\n" }
+  foreach my $msg (@_) { print $erroutfile "$msg\n" }
 
   # Close file
   if (! close($erroutfile)) {
@@ -465,7 +463,8 @@ sub do_sql {
   if (exec_sql($_[0])) {
     if (errors_in_file($TMPOUT1)) {
       output_error_message(sub_name() . ": Error: there have been errors when executing the sql statement.");
-      uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      # uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      appendfile2file($TMPOUT1, $ERROUTFILE);
       return(0);
     }
     # Ok
@@ -473,7 +472,8 @@ sub do_sql {
   }
 
   output_error_message(sub_name() . ": Error: Cannot execute sql statement.");
-  uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+  # uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+  appendfile2file($TMPOUT1, $ERROUTFILE);
 
   return(0);
 
@@ -573,14 +573,16 @@ sub general_info {
     } else {
 
       output_error_message(sub_name() . ": Error: there have been errors when executing the sql statement.");
-      uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      # uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      appendfile2file($TMPOUT1, $ERROUTFILE);
       return(0);
 
     }
   } else {
     # It is a fatal error if that value cannot be derived.
     output_error_message(sub_name() . ": Error: Cannot execute sql statement.");
-    uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+    # uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+    appendfile2file($TMPOUT1, $ERROUTFILE);
     return(0);
   }
 
@@ -1032,26 +1034,6 @@ sub generate_reports {
 
 
 
-# -------------------------------------------------------------------
-sub try_to_compress {
-  # $appended_extension = try_to_compress(filename);
-  #
-  # Tries to compress the given file by checking
-  # the presence of: xz, bzip2 and gzip.
-  #
-  # It returns the new extension or "" if no .
-
-  my ($filename) = @_;
-
-  if (Misc::exec_os_command("xz $filename")) { return(".xz") }
-  if (Misc::exec_os_command("bzip2 $filename")) { return(".bz2") }
-  if (Misc::exec_os_command("gzip $filename")) { return(".gz") }
-  return("");
-
-} # try_to_compress
-
-
-
 # ===================================================================
 # main
 # ===================================================================
@@ -1064,7 +1046,6 @@ $CURRPROG = basename($0);
 $IDENTIFIER = "_" . basename($0, ".pl");
 
 my $currdir = dirname($0);
-my $start_secs = time;
 
 my $initdir = $ENV{"TMP"} || $ENV{"TEMP"} || "/tmp";   #  $currdir;
 my $initial_logfile = "${initdir}/${CURRPROG}_$$.tmp";
@@ -1241,7 +1222,7 @@ title("Set up ULS");
 # Initialize uls with basic settings
 uls_init(\%ULS);
 
-my $d = iso_datetime($start_secs);
+my $d = iso_datetime($STARTSECS);
 # $d =~ s/\d{1}$/0/;
 
 set_uls_timestamp($d);
@@ -1257,7 +1238,7 @@ use sigtrap 'handler' => \&signal_handler, 'normal-signals', 'error-signals';
 uls_timing({
     teststep  => $IDENTIFIER
   , detail    => "start-stop"
-  , start     => iso_datetime($start_secs)
+  , start     => iso_datetime($STARTSECS)
 });
 
 # Send the ULS data up to now to have that for sure.
@@ -1293,12 +1274,7 @@ print "DELIM=$DELIM\n";
 
 # ----- general info ----
 if (! general_info()) {
-  # Check the alert.log, even if Oracle isn't running any longer,
-  # it may contain interesting info.
-  alert_log();
-
   output_error_message("$CURRPROG: Error: A fatal error has ocurred! Aborting script.");
-
   end_script(1);
 }
 
@@ -1381,7 +1357,7 @@ script name, version:
 #   proper execution of this script.
 # 
 
-Copyright 2009-2016, roveda
+Copyright 2009-2017, roveda
 
 Oracle OpTools is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

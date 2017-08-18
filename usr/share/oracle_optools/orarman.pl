@@ -139,6 +139,10 @@
 # 2017-03-21      roveda      0.25
 #   Fixed the broken support of sid specific configuration file.
 #
+# 2017-07-12      roveda      0.26
+#   Instead of a script result message as a sequence of single string lines
+#   a message file is created and finally compressed and sent to ULS but 
+#   only if an error has occured.
 #
 #   Change also $VERSION later in this script!
 #
@@ -153,10 +157,10 @@ use File::Copy;
 
 # These are ULS-modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.41;
+use Uls2 1.16;
 
-my $VERSION = 0.25;
+my $VERSION = 0.26;
 
 # ===================================================================
 # The "global" variables
@@ -167,7 +171,8 @@ my $VERSION = 0.25;
 my $CURRPROG = basename($0);
 
 my $currdir = dirname($0);
-my $start_secs = time;
+# Timestamp of script start is seconds
+my $STARTSECS = time;
 
 # The runtime of this script is measured in minutes
 my $RUNTIME_UNIT = "M";
@@ -182,6 +187,8 @@ my $TMPOUT1;
 my $TMPOUT2;
 my $TMPOUT3;
 my $LOCKFILE;
+my $ERROUTFILE;
+
 
 # Delimiter for tabular query results
 my $DELIM = "!";
@@ -237,29 +244,90 @@ sub signal_handler {
 
   title(sub_name());
 
+  $MSG = "SIGNAL " . $_[0];
+
   output_error_message("$CURRPROG: Signal $_[0] catched! Clean up and abort script.");
 
-  clean_up(@TEMPFILES, $LOCKFILE);
+  end_script(9);
+}
 
+
+# ------------------------------------------------------------
+sub end_script {
+  # end_script(<exit_value>);
+
+  uls_value($IDENTIFIER, "message", $MSG, " ");
+
+  # -----
+  # Is there an error message file?
+  if (-r $ERROUTFILE ) {
+
+    my $uls_filename = "error_message_file.log";
+
+    # Try to compress the file.
+    if (my $new_ext = try_to_compress($ERROUTFILE)) {
+      $ERROUTFILE .= $new_ext;
+      $uls_filename .= $new_ext;
+    }
+
+    # Send the error message file
+    uls_file({
+      teststep  => "$IDENTIFIER"
+     ,detail    => "error message file"
+     ,filename  => $ERROUTFILE
+     ,rename_to => $uls_filename
+    });
+
+  }
+
+  # -----
+  # The following errors are lost!
+  # But the output_error_message() is not used there anyway.
+
+  send_runtime($STARTSECS);
   uls_timing($IDENTIFIER, "start-stop", "stop");
+
   uls_flush(\%ULS);
 
-  exit(9);
-}
+  clean_up(@TEMPFILES, $ERROUTFILE, $LOCKFILE);
+
+  exit($_[0]);
+
+} # end_script
+
 
 # ------------------------------------------------------------
 sub output_error_message {
   # output_error_message(<message>)
   #
-  # Send the given message, set the $MSG variable and
-  # print out the message.
+  # Send the given message(s), set the $MSG variable and
+  # print out the message to STDERR and to an error message file.
 
-  $EXIT_VALUE = 1;
   $MSG = "ERROR";
+  $EXIT_VALUE = 1;
 
   foreach my $msg (@_) { print STDERR "$msg\n" }
-  foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
+  # foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
+
+  # Write all error messages to a file.
+  my $erroutfile;
+  if (! open($erroutfile, ">>:utf8", $ERROUTFILE)) {
+    print STDERR sub_name() . ": Error: Cannot open '$ERROUTFILE' for writing!\n";
+    return(1);
+  }
+
+  foreach my $msg (@_) { print $erroutfile "$msg\n" }
+
+  # Close file
+  if (! close($erroutfile)) {
+    print STDERR sub_name() . ": Error: Cannot close '$ERROUTFILE'!\n";
+    return(1);
+  }
+
+  return(0);
+
 } # output_error_message
+
 
 
 # ------------------------------------------------------------
@@ -281,19 +349,7 @@ sub errors_in_file {
 
   while ($L = <INFILE>) {
     chomp($L);
-    if ($L =~ /ORA-\d+/) {
-      # yes, there have been errors.
-      output_error_message(sub_name() . ": Error: There have been error(s) in file '$filename'!");
-      $ret = 1;
-    }
-
-    if ($L =~ /RMAN-\d+/) {
-      # yes, there have been errors.
-      output_error_message(sub_name() . ": Error: There have been error(s) in file '$filename'!");
-      $ret = 1;
-    }
-
-    if ($L =~ /error/i) {
+    if ($L =~ /ORA-\d+|RMAN-\d+|SP2-\d+|error/i) {
       # yes, there have been errors.
       output_error_message(sub_name() . ": Error: There have been error(s) in file '$filename'!");
       $ret = 1;
@@ -434,7 +490,7 @@ sub do_sql {
   if (exec_sql($_[0])) {
     if (errors_in_file($TMPOUT1)) {
       output_error_message(sub_name() . ": Error: there have been errors when executing the sql statement.");
-      uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      appendfile2file($TMPOUT1, $ERROUTFILE);
       return(0);
     }
     # Ok
@@ -442,7 +498,7 @@ sub do_sql {
   }
 
   output_error_message(sub_name() . ": Error: Cannot execute sql statement.");
-  uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+  appendfile2file($TMPOUT1, $ERROUTFILE);
 
   return(0);
 
@@ -472,7 +528,7 @@ sub clean_up {
 # -------------------------------------------------------------------
 sub send_runtime {
   # The runtime of this script
-  # send_runtime(<start_secs> [, {"s"|"m"|"h"}]);
+  # send_runtime(<STARTSECS> [, {"s"|"m"|"h"}]);
 
   # Current time minus start time.
   my $rt = time - $_[0];
@@ -822,25 +878,6 @@ sub exec_rman {
 } # exec_rman
 
 
-# -------------------------------------------------------------------
-sub try_to_compress {
-  # $appended_extension = try_to_compress(filename);
-  #
-  # Tries to compress the given file by checking
-  # the presence of: xz, bzip2 and gzip.
-  #
-  # It returns the new extension or "" if no .
-
-  my ($filename) = @_;
-
-  if (Misc::exec_os_command("xz $filename")) { return(".xz") }
-  if (Misc::exec_os_command("bzip2 $filename")) { return(".bz2") }
-  if (Misc::exec_os_command("gzip $filename")) { return(".gz") }
-  return("");
-
-} # try_to_compress
-
-
 #--------------------------------------------------------------------
 sub rman_backup {
 
@@ -1055,6 +1092,7 @@ print "WORKFILEPREFIX=$WORKFILEPREFIX\n";
 
 $LOCKFILE = "${WORKFILEPREFIX}.LOCK";
 print "LOCKFILE=$LOCKFILE\n";
+push(@TEMPFILES, $LOCKFILE);
 
 if (! lockfile_build($LOCKFILE)) {
   # LOCK file exists and process is still running, abort silently.
@@ -1109,7 +1147,7 @@ title("Set up ULS");
 # Initialize uls with basic settings
 uls_init(\%ULS);
 
-my $d = iso_datetime($start_secs);
+my $d = iso_datetime($STARTSECS);
 $d =~ s/\d{1}$/0/;
 
 set_uls_timestamp($d);
@@ -1127,7 +1165,7 @@ uls_value($IDENTIFIER, "modules", "Misc $Misc::VERSION, Uls2 $Uls2::VERSION", " 
 uls_timing({
     teststep  => $IDENTIFIER
   , detail    => "start-stop"
-  , start     => iso_datetime($start_secs)
+  , start     => iso_datetime($STARTSECS)
 });
 
 # Send the ULS data up to now to have that for sure.
@@ -1151,6 +1189,10 @@ push(@TEMPFILES, $TMPOUT2);
 $TMPOUT3 = "${WORKFILEPREFIX}_3.tmp";
 print "TMPOUT3=$TMPOUT3\n";
 push(@TEMPFILES, $TMPOUT3);
+
+$ERROUTFILE = "${WORKFILEPREFIX}_errout.log";
+push(@TEMPFILES, $ERROUTFILE);
+print "ERROUTFILE=$ERROUTFILE\n";
 
 print "DELIM=$DELIM\n";
 
@@ -1183,13 +1225,9 @@ $SQLPLUS_COMMAND = $CFG{"ORACLE.SQLPLUS_COMMAND"} || $SQLPLUS_COMMAND;
 if (! general_info()) {
   output_error_message("$CURRPROG: Error: A fatal error has ocurred! Aborting script.");
 
-  uls_value($IDENTIFIER, "$ORARMAN_PARAMETER", 0, "#");
-  send_runtime($start_secs, $RUNTIME_UNIT);
-  uls_timing($IDENTIFIER, "start-stop", "stop");
-  uls_flush(\%ULS);
+  uls_value($IDENTIFIER, "$ORARMAN_PARAMETER", 0, "[#]");
 
-  clean_up(@TEMPFILES, $LOCKFILE);
-  exit(1);
+  end_script(1);
 }
 
 # -------------------------------------------------------------------
@@ -1198,13 +1236,9 @@ if (! general_info()) {
 if (! check_for_archivelog()) {
   output_error_message("$CURRPROG: Error: A fatal error has ocurred! Aborting script.");
 
-  uls_value($IDENTIFIER, "$ORARMAN_PARAMETER", 0, "#");
-  send_runtime($start_secs, $RUNTIME_UNIT);
-  uls_timing($IDENTIFIER, "start-stop", "stop");
-  uls_flush(\%ULS);
+  uls_value($IDENTIFIER, "$ORARMAN_PARAMETER", 0, "[#]");
 
-  clean_up(@TEMPFILES, $LOCKFILE);
-  exit(1);
+  end_script(1);
 }
 
 
@@ -1216,28 +1250,19 @@ rman_backup();
 # The real work ends here.
 # -------------------------------------------------------------------
 
-# Any errors will have sent already its error messages.
-uls_value($IDENTIFIER, "message", $MSG, " ");
-# uls_value($IDENTIFIER, "exit value", $EXIT_VALUE, "#");
-
 # $EXIT_VALUE = 0 => Ok, 1 => Error
 uls_value($IDENTIFIER, "$ORARMAN_PARAMETER", 1-$EXIT_VALUE, "[#]");
 # 0 => Error, 1 => Ok
 
 send_doc($CURRPROG, $IDENTIFIER);
 
-send_runtime($start_secs, $RUNTIME_UNIT);
+if ($MSG eq "OK") {end_script(0)}
 
-uls_timing($IDENTIFIER, "start-stop", "stop");
-uls_flush(\%ULS);
+end_script(1);
 
-
-# -------------------------------------------------------------------
-clean_up(@TEMPFILES, $LOCKFILE);
-title("END");
-
-if ($MSG eq "OK") {exit(0)}
-else {exit(1)}
+# -----
+# Script should never arrive here.
+exit(255);
 
 
 #########################
@@ -1305,7 +1330,7 @@ RMAN log file:
 #   proper execution of this script.
 # 
 
-Copyright 2008-2016, roveda
+Copyright 2008-2017, roveda
 
 Oracle OpTools is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

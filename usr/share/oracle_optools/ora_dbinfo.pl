@@ -169,6 +169,17 @@
 # 2017-04-04      roveda      0.28
 #   Merged the NLS parameters into one table.
 #
+# 2017-07-07      roveda      0.29
+#   Instead of a script result message as a sequence of single string lines
+#   a message file is created and finally compressed and sent to ULS but 
+#   only if an error has occured.
+#
+# 2017-08-18      roveda      0.30
+#   Use now the Oracle sql script options_packs_usage_statistics.sql as delivered.
+#   The content is textually extracted from the generated text file.
+#   That should result in less maintenance work for this script.
+#   REMEMBER: the path of the spool file must be changed in the options_packs_usage_statistics.sql script!
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -182,11 +193,11 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.41;
+use Uls2 1.16;
 use HtmlDocument;
 
-my $VERSION = 0.28;
+my $VERSION = 0.30;
 
 # ===================================================================
 # The "global" variables
@@ -194,15 +205,23 @@ my $VERSION = 0.28;
 
 # Name of this script.
 my $CURRPROG = "";
+# Timestamp of script start is seconds
+my $STARTSECS = time;
 
 # The default command to execute sql commands.
 my $SQLPLUS_COMMAND = 'sqlplus -S "/ as sysdba"';
+
+# Keeps the list of temporary files, to be purged at script end
+# push filenames onto this array.
+my @TEMPFILES;
 
 my $WORKFILEPREFIX;
 my $TMPOUT1;
 my $TMPOUT2;
 my $HTMLOUT1;
 my $LOCKFILE;
+my $ERROUTFILE;
+
 my $DELIM = "!";
 
 # This hash keeps the command line arguments
@@ -309,27 +328,87 @@ sub signal_handler {
 
   title(sub_name());
 
+  $MSG = "SIGNAL " . $_[0];
+
   output_error_message("$CURRPROG: Signal $_[0] catched! Clean up and abort script.");
 
-  clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+  end_script(9);
+}
 
+
+# ------------------------------------------------------------
+sub end_script {
+  # end_script(<exit_value>);
+
+  uls_value($IDENTIFIER, "message", $MSG, " ");
+
+  # -----
+  # Is there an error message file?
+  if (-r $ERROUTFILE ) {
+
+    my $uls_filename = "error_message_file.log";
+
+    # Try to compress the file.
+    if (my $new_ext = try_to_compress($ERROUTFILE)) {
+      $ERROUTFILE .= $new_ext;
+      $uls_filename .= $new_ext;
+    }
+
+    # Send the error message file
+    uls_file({
+      teststep  => "$IDENTIFIER"
+     ,detail    => "error message file"
+     ,filename  => $ERROUTFILE
+     ,rename_to => $uls_filename
+    });
+
+  }
+
+  # -----
+  # The following errors are lost!
+  # But the output_error_message() is not used there anyway.
+
+  send_runtime($STARTSECS);
   uls_timing($IDENTIFIER, "start-stop", "stop");
+
   uls_flush(\%ULS);
 
-  exit(9);
-}
+  clean_up(@TEMPFILES);
+
+  exit($_[0]);
+
+} # end_script
+
+
 
 # ------------------------------------------------------------
 sub output_error_message {
   # output_error_message(<message>)
   #
   # Send the given message(s), set the $MSG variable and
-  # print out the message.
+  # print out the message to STDERR and to an error message file.
 
-  $EXIT_VALUE = 1;
   $MSG = "ERROR";
+
   foreach my $msg (@_) { print STDERR "$msg\n" }
-  foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
+  # foreach my $msg (@_) { uls_value($IDENTIFIER, "message", $msg, " ") }
+
+  # Write all error messages to a file.
+  my $erroutfile;
+  if (! open($erroutfile, ">>:utf8", $ERROUTFILE)) {
+    print STDERR sub_name() . ": Error: Cannot open '$ERROUTFILE' for writing!\n";
+    return(1);
+  }
+
+  foreach my $msg (@_) { print $erroutfile "$msg\n" }
+
+  # Close file
+  if (! close($erroutfile)) {
+    print STDERR sub_name() . ": Error: Cannot close '$ERROUTFILE'!\n";
+    return(1);
+  }
+
+  return(0);
 
 } # output_error_message
 
@@ -381,6 +460,11 @@ sub errors_in_file {
   while ($L = <INFILE>) {
     chomp($L);
     if ($L =~ /ORA-/i) {
+      # yes, there have been errors.
+      output_error_message(sub_name() . ": Error: There have been error(s) in file '$filename'!");
+      return(1);
+    }
+    if ($L =~ /SP2-\d{4,}/i) {
       # yes, there have been errors.
       output_error_message(sub_name() . ": Error: There have been error(s) in file '$filename'!");
       return(1);
@@ -557,7 +641,8 @@ sub do_sql {
   if (exec_sql(@_)) {
     if (errors_in_file($TMPOUT1)) {
       output_error_message(sub_name() . ": Error: there have been errors when executing the sql statement.");
-      uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      # uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+      appendfile2file($TMPOUT1, $ERROUTFILE);
       return(0);
     }
     # Ok
@@ -565,7 +650,8 @@ sub do_sql {
   }
 
   output_error_message(sub_name() . ": Error: Cannot execute sql statement.");
-  uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+  # uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+  appendfile2file($TMPOUT1, $ERROUTFILE);
 
   return(0);
 
@@ -588,7 +674,7 @@ sub clean_up {
     if (-e $f) {
       print "Removing file '$f' ...";
       if (unlink($f)) {print "Done.\n"}
-      else {print "Failed.\n"}
+      else {print STDERR "Removing of file '$f' has failed! $!\n"}
     }
   }
 
@@ -677,6 +763,39 @@ sub get_instance_ip {
   return(undef);
 
 } # get_instance_ip
+
+
+
+# -------------------------------------------------------------------
+sub get_instance_port {
+
+  # Use the $ORACLE_SID for a:
+  # tnsping $ORACLE_SID
+  # parse the output for the hostname or ip address:
+  # ...(PROTOCOL = TCP)(HOST = 10.20.30.40)(PORT = 1234))) ...
+
+  my $tnsping = `tnsping $ENV{ORACLE_SID}`;
+  print "[$tnsping]\n";
+
+  # \s whitespace
+  # \S non-whitespace
+  $tnsping =~ /\(PORT\s*=\s*(\S+?)\s*\)/;
+  my $port = $1;
+
+  # nothing found
+  if (! $port) {
+    print "No PORT parameter found in tnsping output!\n";
+    return(undef);
+  }
+
+  # Is it a port?
+  # Check for digits at the beginning.
+  if ($port =~ /\d{1,5}/) { return($port) }
+
+  print "No valid port number found!\n";
+  return(undef);
+
+} # get_instance_port
 
 
 
@@ -973,36 +1092,97 @@ sub multitenant_info {
 
   title(sub_name());
 
-  my $sql = "
-    select c.CON_ID, c.NAME, c.OPEN_MODE, c.RESTRICTED,
-    case when c.OPEN_MODE not like 'READ%' and c.CON_ID = sys_context('USERENV', 'CON_ID') and c.CON_ID != 0 then
-              'NOT OPEN! DBA_FEATURE_USAGE_STATISTICS is not accessible. *CURRENT CONTAINER'
-         when c.OPEN_MODE not like 'READ%' then
-              'NOT OPEN! DBA_FEATURE_USAGE_STATISTICS is not accessible.'
-         when c.CON_ID = sys_context('USERENV', 'CON_ID') and d.CDB='YES' and c.CON_ID not in (0, 1) then
-              '*CURRENT CONTAINER. Only data for this PDB will be listed.'
-         when c.CON_ID = sys_context('USERENV', 'CON_ID') and d.CDB='YES' and c.CON_ID = 1 then
-              '*CURRENT CONTAINER is CDB\$ROOT. Information for all open PDBs will be listed.'
-         else ''
-    end as REMARKS
-    from V\$CONTAINERS c, V\$DATABASE d
-    order by CON_ID;
+  my $opusfile = "/tmp/options_packs_usage_statistics.txt";
 
-  ";
+  if (-e $opusfile) {
+    my $age_of_file = (-M $opusfile) * 24 * 60;  # age of file in minutes
+    if ($age_of_file > 5) {
+      print "Removing old '$opusfile'...";
+      if (unlink($opusfile)) {print "done.\n"}
+      else {
+        print "failed.\n";
+        output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
+      }
+      system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+    } else { 
+      print "File '$opusfile' is younger than 5 minutes, use it.\n";
+    }
+  }
 
-  if (! do_sql($sql)) {return(0)}
+  if (! open(OPUSFILE, "<", $opusfile) ) {
+    print "Cannot open file $opusfile for reading!\n";
+    return(undef);
+  }
 
-  my @O = ();
-  get_value_lines(\@O, $TMPOUT1);
+  my $in_table = 0;
+  my $headline = "";
+  my @report_lines = ();
 
-  # Container? Pluggables?
+  while (my $line = <OPUSFILE>) {
+    chomp $line;
+    # -----
+    # Bail out, if the end of the table has been reached.
+    if ( $headline && $in_table && $line eq "" ) { last } 
+    # print "[$line]\n";
 
-  # report
-  # prepend a title line
-  unshift(@O, " Container ID $DELIM Name $DELIM Open Mode $DELIM Restricted $DELIM Remarks ");
+    #
+    # if ( $in_table && $line eq "" ) {
+    #  # Finish compiled report before starting a new one:
+    #  if ($headline) {
+    #    print "=====================================================\n";
+    #    print "headline=$headline\n";
+    #    print join("\n", @report_lines), "\n\n\n";
+    #  }
+    #
+    #  @report_lines = ();
+    #  $headline = "";
+    #}
+
+    # -----
+    $in_table = 0;
+    # If the line contains |, then you are processing a table section.
+    if ( $line =~ /\|/ ) { $in_table = 1 }
+
+    # -----
+    # If specific expressions appear at the beginning of the line
+    # then you are processing a new headline.
+    # Do NOT abbreviate the expressions!
+
+    # if ($line =~ /^MULTITENANT INFORMATION|^PRODUCT USAGE|^FEATURE USAGE DETAILS/) {
+    if ($line =~ /^MULTITENANT INFORMATION/) {
+      # Start a new report (or report table)
+      $headline = $line;
+      $in_table = 0;
+    }
+
+    # -----
+    #
+    # CON_ID|NAME                          |OPEN_MODE       |RESTRICTED|REMARKS
+    # ------|------------------------------|----------------|----------|-------------------
+    #      0|mukuor2t                      |READ WRITE      |NO        |
+
+    # If you have a non-empty headline
+    if ($headline) {
+      # and if you are processing the lines of a table
+      if ($in_table) {
+        if ($line =~ /---/ ) {
+          # Ignore the lines with ---
+        } else {
+          # Then add this line to the resulting array of report lines
+          # print "[$line]\n";
+          push(@report_lines, $line);
+        }
+      }
+    }
+
+  } # while
+
+  close(OPUSFILE);
 
   $HtmlReport->add_heading(2, "Multitenant Information", "_default_");
-  $HtmlReport->add_table(\@O, $DELIM, "LLLLL", 1);
+  # $HtmlReport->add_table(\@report_lines, $DELIM, "LLLLL", 1);
+  # Remember: the delimiter is the pipe '|' instead of my default '!'
+  $HtmlReport->add_table(\@report_lines, '\|', "LLLLL", 1);
   $HtmlReport->add_goto_top("top");
 
   return(1);
@@ -1012,9 +1192,7 @@ sub multitenant_info {
 
 # -------------------------------------------------------------------
 sub feature_usage_details11_2_0_4 {
-  # This sub is specially prepared for Oracle 11.2.0.4, older versions are NOT correctly gathered.
-  # See option_usage12_1 for Oracle 12.1.
-  #
+  # This sub is specially prepared for Oracle 11.2.0.4 and later, older versions are NOT correctly gathered.
   # See MOS Note 1317265.1 for further information (since Aug 2015).
   #
   # -----------------------------------------------------------------------
@@ -1026,280 +1204,88 @@ sub feature_usage_details11_2_0_4 {
 
   title(sub_name());
 
-  my $sql = "
+  my $opusfile = "/tmp/options_packs_usage_statistics.txt";
 
-col CON_ID  NOPRINT
-col GID     NOPRINT
-col CON_NAME NOPRINT
+  if (-e $opusfile) {
+    my $age_of_file = (-M $opusfile) * 24 * 60;  # age of file in minutes
+    if ($age_of_file > 5) {
+      print "Removing old '$opusfile'...";
+      if (unlink($opusfile)) {print "done.\n"}
+      else {
+        print "failed.\n";
+        output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
+      }
+      system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+    } else {
+      print "File '$opusfile' is younger than 5 minutes, use it.\n";
+    }
+  }
 
-with
-MAP as (
--- mapping between features tracked by DBA_FUS and their corresponding database products (options or packs)
-select '' PRODUCT, '' feature, '' MVERSION, '' CONDITION from dual union all
-SELECT 'Active Data Guard'                                   , 'Active Data Guard - Real-Time Query on Physical Standby' , '11.2'       , ' '       from dual union all
-SELECT 'Active Data Guard'                                   , 'Active Data Guard - Real-Time Query on Physical Standby' , '12.1'       , ' '       from dual union all
-SELECT 'Active Data Guard'                                   , 'Global Data Services'                                    , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Analytics'                                  , 'Data Mining'                                             , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Analytics'                                  , 'Data Mining'                                             , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'ADVANCED Index Compression'                              , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Advanced Index Compression'                              , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup HIGH Compression'                                 , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup HIGH Compression'                                 , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup LOW Compression'                                  , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup LOW Compression'                                  , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup MEDIUM Compression'                               , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup MEDIUM Compression'                               , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup ZLIB Compression'                                 , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup ZLIB Compression'                                 , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Data Guard'                                              , '11.2'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Data Guard'                                              , '12.1'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Flashback Data Archive'                                  , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Flashback Data Archive'                                  , '11.2.0.4'   , 'INVALID' from dual union all -- licensing required by Optimization for Flashback Data Archive
-SELECT 'Advanced Compression'                                , 'Flashback Data Archive'                                  , '12.1'       , 'INVALID' from dual union all -- licensing required by Optimization for Flashback Data Archive
-SELECT 'Advanced Compression'                                , 'HeapCompression'                                         , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'HeapCompression'                                         , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Heat Map'                                                , '12.1'       , ' '       from dual union all --
-SELECT 'Advanced Compression'                                , 'Hybrid Columnar Compression Row Level Locking'           , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Information Lifecycle Management'                        , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Advanced Network Compression Service'             , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Export)'                        , '11.2'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Export)'                        , '12.1'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Import)'                        , '11.2'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Import)'                        , '12.1'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Compression (user)'                           , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Compression (user)'                           , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Deduplication (user)'                         , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Deduplication (user)'                         , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Backup Encryption'                                       , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Backup Encryption'                                       , '12.1'       , 'INVALID' from dual union all -- licensing required only by encryption to disk
-SELECT 'Advanced Security'                                   , 'Data Redaction'                                          , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Encrypted Tablespaces'                                   , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Encrypted Tablespaces'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Export)'                        , '11.2'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Export)'                        , '12.1'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Import)'                        , '11.2'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Import)'                        , '12.1'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'SecureFile Encryption (user)'                            , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'SecureFile Encryption (user)'                            , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Transparent Data Encryption'                             , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Transparent Data Encryption'                             , '12.1'       , ' '       from dual union all
-SELECT 'Change Management Pack'                              , 'Change Management Pack'                                  , '11.2'       , ' '       from dual union all
-SELECT 'Configuration Management Pack for Oracle Database'   , 'EM Config Management Pack'                               , '11.2'       , ' '       from dual union all
-SELECT 'Data Masking Pack'                                   , 'Data Masking Pack'                                       , '11.2'       , ' '       from dual union all
-SELECT '.Database Gateway'                                   , 'Gateways'                                                , '12.1'       , ' '       from dual union all
-SELECT '.Database Gateway'                                   , 'Transparent Gateway'                                     , '12.1'       , ' '       from dual union all
-SELECT 'Database In-Memory'                                  , 'In-Memory Aggregation'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Database In-Memory'                                  , 'In-Memory Column Store'                                  , '12.1.0.2'   , 'BUG'     from dual union all
-SELECT 'Database Vault'                                      , 'Oracle Database Vault'                                   , '11.2'       , ' '       from dual union all
-SELECT 'Database Vault'                                      , 'Oracle Database Vault'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Database Vault'                                      , 'Privilege Capture'                                       , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'ADDM'                                                    , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'ADDM'                                                    , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline'                                            , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline'                                            , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline Template'                                   , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline Template'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Report'                                              , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Report'                                              , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Automatic Workload Repository'                           , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Adaptive Thresholds'                            , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Adaptive Thresholds'                            , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Static Computations'                            , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Static Computations'                            , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Diagnostic Pack'                                         , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'EM Performance Page'                                     , '12.1'       , ' '       from dual union all
-SELECT '.Exadata'                                            , 'Exadata'                                                 , '11.2'       , ' '       from dual union all
-SELECT '.Exadata'                                            , 'Exadata'                                                 , '12.1'       , ' '       from dual union all
-SELECT '.GoldenGate'                                         , 'GoldenGate'                                              , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'Hybrid Columnar Compression'                             , '12.1'       , 'BUG'     from dual union all
-SELECT '.HW'                                                 , 'Hybrid Columnar Compression Row Level Locking'           , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'Sun ZFS with EHCC'                                       , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'ZFS Storage'                                             , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'Zone maps'                                               , '12.1'       , ' '       from dual union all
-SELECT 'Label Security'                                      , 'Label Security'                                          , '11.2'       , ' '       from dual union all
-SELECT 'Label Security'                                      , 'Label Security'                                          , '12.1'       , ' '       from dual union all
-SELECT 'Multitenant'                                         , 'Oracle Multitenant'                                      , '12.1'       , 'C003'    from dual union all -- licensing required only when more than one PDB containers are created
-SELECT 'Multitenant'                                         , 'Oracle Pluggable Databases'                              , '12.1'       , 'C003'    from dual union all -- licensing required only when more than one PDB containers are created
-SELECT 'OLAP'                                                , 'OLAP - Analytic Workspaces'                              , '11.2'       , ' '       from dual union all
-SELECT 'OLAP'                                                , 'OLAP - Analytic Workspaces'                              , '12.1'       , ' '       from dual union all
-SELECT 'OLAP'                                                , 'OLAP - Cubes'                                            , '12.1'       , ' '       from dual union all
-SELECT 'Partitioning'                                        , 'Partitioning (user)'                                     , '11.2'       , ' '       from dual union all
-SELECT 'Partitioning'                                        , 'Partitioning (user)'                                     , '12.1'       , ' '       from dual union all
-SELECT 'Partitioning'                                        , 'Zone maps'                                               , '12.1'       , ' '       from dual union all
-SELECT '.Pillar Storage'                                     , 'Pillar Storage'                                          , '12.1'       , ' '       from dual union all
-SELECT '.Pillar Storage'                                     , 'Pillar Storage with EHCC'                                , '12.1'       , ' '       from dual union all
-SELECT '.Provisioning and Patch Automation Pack'             , 'EM Standalone Provisioning and Patch Automation Pack'    , '11.2'       , ' '       from dual union all
-SELECT 'Provisioning and Patch Automation Pack for Database' , 'EM Database Provisioning and Patch Automation Pack'      , '11.2'       , ' '       from dual union all
-SELECT 'RAC or RAC One Node'                                 , 'Quality of Service Management'                           , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Clusters'                           , 'Real Application Clusters (RAC)'                         , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Clusters'                           , 'Real Application Clusters (RAC)'                         , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Clusters One Node'                  , 'Real Application Cluster One Node'                       , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Capture'                       , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Capture'                       , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Replay'                        , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Replay'                        , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'SQL Performance Analyzer'                                , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'SQL Performance Analyzer'                                , '12.1'       , ' '       from dual union all
-SELECT '.Secure Backup'                                      , 'Oracle Secure Backup'                                    , '12.1'       , 'INVALID' from dual union all  -- does not differentiate usage of Oracle Secure Backup Express, which is free
-SELECT 'Spatial and Graph'                                   , 'Spatial'                                                 , '11.2'       , 'INVALID' from dual union all  -- does not differentiate usage of Locator, which is free
-SELECT 'Spatial and Graph'                                   , 'Spatial'                                                 , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Automatic Maintenance - SQL Tuning Advisor'              , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Automatic SQL Tuning Advisor'                            , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Automatic SQL Tuning Advisor'                            , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Real-Time SQL Monitoring'                                , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Real-Time SQL Monitoring'                                , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Access Advisor'                                      , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Access Advisor'                                      , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Monitoring and Tuning pages'                         , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Profile'                                             , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Profile'                                             , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Tuning Advisor'                                      , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Tuning Advisor'                                      , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Tuning Set (user)'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Tuning Pack'                                             , '11.2'       , ' '       from dual union all
-SELECT '.WebLogic Server Management Pack Enterprise Edition' , 'EM AS Provisioning and Patch Automation Pack'            , '11.2'       , ' '       from dual union all
-select '' PRODUCT, '' FEATURE, '' MVERSION, '' CONDITION from dual
-),
-FUS as (
--- the current data set to be used: DBA_FEATURE_USAGE_STATISTICS or CDB_FEATURE_USAGE_STATISTICS for Container Databases(CDBs)
-select
-    -1 as CON_ID,
-    to_char(NULL) as CON_NAME,
-    -- Detect and mark with Y the current DBA_FUS data set = Most Recent Sample based on LAST_SAMPLE_DATE
-      case when DBID || '#' || VERSION || '#' || to_char(LAST_SAMPLE_DATE, 'YYYYMMDDHH24MISS') =
-                first_value (DBID    )         over (partition by -1 order by LAST_SAMPLE_DATE desc nulls last, DBID desc) || '#' ||
-                first_value (VERSION )         over (partition by -1 order by LAST_SAMPLE_DATE desc nulls last, DBID desc) || '#' ||
-                first_value (to_char(LAST_SAMPLE_DATE, 'YYYYMMDDHH24MISS'))
-                                               over (partition by -1 order by LAST_SAMPLE_DATE desc nulls last, DBID desc)
-           then 'Y'
-           else 'N'
-    end as CURRENT_ENTRY,
-    NAME            ,
-    LAST_SAMPLE_DATE,
-    DBID            ,
-    VERSION         ,
-    DETECTED_USAGES ,
-    TOTAL_SAMPLES   ,
-    CURRENTLY_USED  ,
-    FIRST_USAGE_DATE,
-    LAST_USAGE_DATE ,
-    AUX_COUNT       ,
-    FEATURE_INFO
-from DBA_FEATURE_USAGE_STATISTICS xy
-),
-PFUS as (
--- Product-Feature Usage Statitsics = DBA_FUS entries mapped to their corresponding database products
-select
-    CON_ID,
-    CON_NAME,
-    PRODUCT,
-    NAME as FEATURE_BEING_USED,
-    case  when CONDITION = 'BUG'
-               --suppressed due to exceptions/defects
-            then '3.SUPPRESSED_DUE_TO_BUG'
-          when detected_usages > 0               -- some usage detection - current or past
-           and(trim(CONDITION) is null
-               -- if special conditions (coded on the MAP.CONDITION column) are required, check if entries satisfy the condition
-               -- C001 = compression has been used
-               or CONDITION = 'C001' and regexp_like(to_char(FEATURE_INFO), 'compression used: *TRUE', 'i')
-               -- C002 = encryption has been used
-               or CONDITION = 'C002' and regexp_like(to_char(FEATURE_INFO), 'encryption used: *TRUE', 'i')
-               -- C003 = more than one PDB are created
-               or CONDITION = 'C003' and CON_ID=1 and AUX_COUNT > 1
-              )
-            then decode(CURRENT_ENTRY || '#' || CURRENTLY_USED, 'Y#TRUE', '6.CURRENT_USAGE', '4.PAST_USAGE')
-          when detected_usages > 0               -- some usage detection - current or past
-           and(
-               -- if special counter conditions (coded on the MAP.CONDITION column) are required, check if the counter value is not 0
-               -- C001 = compression has been used at least once
-                  CONDITION = 'C001' and regexp_like(to_char(FEATURE_INFO), 'compression used:[ 0-9]*[1-9][ 0-9]*time', 'i')
-               -- C002 = encryption has been used at least once
-               or CONDITION = 'C002' and regexp_like(to_char(FEATURE_INFO), 'encryption used:[ 0-9]*[1-9][ 0-9]*time', 'i')
-              )
-            then decode(CURRENT_ENTRY || '#' || CURRENTLY_USED, 'Y#TRUE', '5.PAST_OR_CURRENT_USAGE', '4.PAST_USAGE') -- FEATURE_INFO counters indicate current or past usage
-          when CURRENT_ENTRY = 'Y' then '2.NO_CURRENT_USAGE'   -- detectable feature shows no current usage
-          else '1.NO_PAST_USAGE'
-    end as USAGE,
-    LAST_SAMPLE_DATE,
-    DBID            ,
-    VERSION         ,
-    DETECTED_USAGES ,
-    TOTAL_SAMPLES   ,
-    CURRENTLY_USED  ,
-    FIRST_USAGE_DATE,
-    LAST_USAGE_DATE,
-    case when CONDITION = 'C001' then
-                     regexp_substr(to_char(FEATURE_INFO), 'compression used:(.*?)(times|TRUE|FALSE)', 1, 1, 'i')
-         when CONDITION = 'C002' then
-                     regexp_substr(to_char(FEATURE_INFO), 'encryption used:(.*?)(times|TRUE|FALSE)', 1, 1, 'i')
-         when CONDITION = 'C003' then
-              'AUX_COUNT=' || AUX_COUNT
-         else ''
-    end as EXTRA_FEATURE_INFO
-from (
-select m.PRODUCT, m.CONDITION, m.MVERSION,
-       first_value (m.MVERSION) over (partition by f.CON_ID, f.NAME, f.VERSION order by m.MVERSION desc nulls last) as MMVERSION,
-       f.*
-  from MAP m
-  join FUS f on m.FEATURE = f.NAME and m.MVERSION = substr(f.VERSION, 1, length(m.MVERSION))
-  where nvl(f.TOTAL_SAMPLES, 0) > 0            -- ignore features that have never been sampled
-)
-  where MVERSION = MMVERSION              -- retain only the MAP entry that mathces the most to the DBA_FUS version = the \"most matching version\"
-    and nvl(CONDITION, '-') != 'INVALID'  -- ignore entries that are invalidated by bugs or known issues or correspond to features which became free of charge
-    and not (CONDITION = 'C003' and CON_ID not in (0, 1)) -- multiple PDBs are visible only in CDB\$ROOT
-)
-select
-    CON_ID            ,
-    CON_NAME          ,
-    PRODUCT           ,
-    FEATURE_BEING_USED,
-    VERSION           ,
-    decode(USAGE,
-          '1.NO_PAST_USAGE'        , 'NO_PAST_USAGE'        ,
-          '2.NO_CURRENT_USAGE'     , 'NO_CURRENT_USAGE'     ,
-          '3.SUPPRESSED_DUE_TO_BUG', 'SUPPRESSED_DUE_TO_BUG',
-          '4.PAST_USAGE'           , 'PAST_USAGE'           ,
-          '5.PAST_OR_CURRENT_USAGE', 'PAST_OR_CURRENT_USAGE',
-          '6.CURRENT_USAGE'        , 'CURRENT_USAGE'        ,
-          'UNKNOWN') as USAGE,
-    -- nvl(to_char(LAST_SAMPLE_DATE, 'yyyy-mm-dd HH24:MI:SS'), '-')  ,
-    -- TOTAL_SAMPLES     ,
-    -- DBID              ,
-    DETECTED_USAGES   ,
-    CURRENTLY_USED    ,
-    nvl(to_char(FIRST_USAGE_DATE, 'yyyy-mm-dd HH24:MI:SS'), '-')  ,
-    nvl(to_char(LAST_USAGE_DATE, 'yyyy-mm-dd HH24:MI:SS'), '-')
-    -- , EXTRA_FEATURE_INFO
-  from PFUS
-  -- where USAGE in ('2.NO_CURRENT_USAGE', '3.SUPPRESSED_DUE_TO_BUG', '4.PAST_USAGE', '5.PAST_OR_CURRENT_USAGE', '6.CURRENT_USAGE')  -- ignore '1.NO_PAST_USAGE'
-order by CON_ID, decode(substr(PRODUCT, 1, 1), '.', 2, 1), PRODUCT, FEATURE_BEING_USED, LAST_SAMPLE_DATE desc, PFUS.USAGE
-;
+  if (! open(OPUSFILE, "<", $opusfile) ) {
+    print "Cannot open file $opusfile for reading!\n";
+    return(undef);
+  }
 
-  ";
+  my $in_table = 0;
+  my $headline = "";
+  my @report_lines = ();
 
-  if (! do_sql($sql)) {return(0)}
+  while (my $line = <OPUSFILE>) {
+    chomp $line;
+    # -----
+    # Bail out, if the end of the table has been reached.
+    if ( $headline && $in_table && $line eq "" ) { last }
+    # print "[$line]\n";
 
-  my @O = ();
-  get_value_lines(\@O, $TMPOUT1);
+    # -----
+    $in_table = 0;
+    # If the line contains |, then you are processing a table section.
+    if ( $line =~ /\|/ ) { $in_table = 1 }
 
+    # -----
+    # If specific expressions appear at the beginning of the line
+    # then you are processing a new headline.
+    # Do NOT abbreviate the expressions!
 
-  # features
-  # 
-  # NOTE: the used options with extra licence are gathered in product_usage11_0_2_4()
-  # 
-  # foreach my $i (@O) {
-  #   my @E = split($DELIM, $i);
-  #   @E = map(trim($_), @E);
-  # 
-  #   # Only USED options are reported in the inventory
-  #   append2inventory("ORACLEOPTIONUSAGE", $E[0], $E[1], $E[2], $E[3]);
-  # }
+    # if ($line =~ /^MULTITENANT INFORMATION|^PRODUCT USAGE|^FEATURE USAGE DETAILS/) {
+    if ($line =~ /^FEATURE USAGE DETAILS/) {
+      # Start a new report (or report table)
+      $headline = $line;
+      $in_table = 0;
+    }
 
-  # report
-  # prepend a title line
-  # unshift(@O, " product $DELIM feature $DELIM version $DELIM usage $DELIM last sample date $DELIM total samples $DELIM detected usages $DELIM currently used $DELIM first usage date $DELIM last usage date ");
+    # -----
+    # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    # FEATURE USAGE DETAILS
+    # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    # 
+    # PRODUCT              |FEATURE_BEING_USED         |USAGE                 |LAST_SAMPLE_DATE   |      DBID|VERSION    |DETECTED_USAGES|TOTAL_SAMPLES|CURRENTLY_USED|FIRST_USAGE_DATE   |LAST_USAGE_DATE    |EXTRA_FEATURE_INFO
+    # ---------------------|---------------------------|----------------------|-------------------|----------|-----------|---------------|-------------|--------------|-------------------|-------------------|------------------
+    # Active Data Guard    |Global Data Services       |NO_CURRENT_USAGE      |2017.07.08_09.50.28|2992156657|12.1.0.2.0 |              0|           41|FALSE         |                   |                   |
+    # Advanced Analytics   |Data Mining                |NO_CURRENT_USAGE      |2017.07.08_09.50.28|2992156657|12.1.0.2.0 |              0|           41|FALSE         |                   |                   |
+    # Advanced Compression |Advanced Index Compression |SUPPRESSED_DUE_TO_BUG |2017.07.08_09.50.28|2992156657|12.1.0.2.0 |              0|           41|FALSE         |                   |                   |
+    # Diagnostics Pack     |ADDM                       |CURRENT_USAGE         |2017.07.08_09.50.28|2992156657|12.1.0.2.0 |             28|           41|TRUE          |2016.10.06_04.38.40|2017.07.08_09.50.28|
+    # 
 
-  unshift(@O, " product $DELIM feature $DELIM version $DELIM detected usages $DELIM usage $DELIM currently used $DELIM first usage date $DELIM last usage date ");
+    # If you have a non-empty headline
+    if ($headline) {
+      # and if you are processing the lines of a table
+      if ($in_table) {
+        if ($line =~ /---/ ) {
+          # Ignore the lines with ---
+        } else {
+          # Then add this line to the resulting array of report lines
+          # print "[$line]\n";
+          push(@report_lines, $line);
+        }
+      }
+    }
+
+  } # while
+
+  close(OPUSFILE);
+
+  # unshift(@O, " product $DELIM feature $DELIM version $DELIM detected usages $DELIM usage $DELIM currently used $DELIM first usage date $DELIM last usage date ");
 
   $HtmlReport->add_heading(2, "Feature Usage Details", "_default_");
 
@@ -1309,7 +1295,9 @@ order by CON_ID, decode(substr(PRODUCT, 1, 1), '.', 2, 1), PRODUCT, FEATURE_BEIN
   $HtmlReport->add_paragraph('p', "For historical details check FIRST_USAGE_DATE, LAST_USAGE_DATE, LAST_SAMPLE_DATE, TOTAL_SAMPLES, DETECTED_USAGES columns.
 A leading dot (.) denotes a product that is not a Database Option or Database Management Pack.");
 
-  $HtmlReport->add_table(\@O, $DELIM, "LLLLRLLL", 1);
+  $HtmlReport->add_paragraph('p', "Please refer to MOS DOC ID 1317265.1 and 1309070.1 for more information.");
+
+  $HtmlReport->add_table(\@report_lines, '\|', "LLLLLLRRLLLL", 1);
   $HtmlReport->add_goto_top("top");
 
   return(1);
@@ -1320,6 +1308,8 @@ A leading dot (.) denotes a product that is not a Database Option or Database Ma
 # -------------------------------------------------------------------
 sub product_usage  {
   # -----
+  # This is for Oracle versions BELOW 11.2.0.4 only!
+  #
   # installed features
   #
   # NOTE: That are NOT the options!
@@ -1375,7 +1365,7 @@ sub product_usage  {
 
 # -------------------------------------------------------------------
 sub product_usage11_2_0_4 {
-  # 11.2.0.4 and up
+  # This is for Oracle version of 11.2.0.4 and higher.
 
   # see MOS Note 1317265.1
 
@@ -1383,254 +1373,91 @@ sub product_usage11_2_0_4 {
 
   my ($dbid) = @_;
 
-  my $sql = "";
-  $sql = "
+  my $opusfile = "/tmp/options_packs_usage_statistics.txt";
 
--- these are part of the select statement but may not appear as output.
-col CON_ID  NOPRINT
-col GID     NOPRINT
-col CON_NAME NOPRINT
+  if (-e $opusfile) {
+    my $age_of_file = (-M $opusfile) * 24 * 60;  # age of file in minutes
+    if ($age_of_file > 5) {
+      print "Removing old '$opusfile'...";
+      if (unlink($opusfile)) {print "done.\n"}
+      else {
+        print "failed.\n";
+        output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
+      }
+      system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+    } else {
+      print "File '$opusfile' is younger than 5 minutes, use it.\n";
+    }
+  }
 
-with
-MAP as (
--- mapping between features tracked by DBA_FUS and their corresponding database products (options or packs)
-select '' PRODUCT, '' feature, '' MVERSION, '' CONDITION from dual union all
-SELECT 'Active Data Guard'                                   , 'Active Data Guard - Real-Time Query on Physical Standby' , '11.2'       , ' '       from dual union all
-SELECT 'Active Data Guard'                                   , 'Active Data Guard - Real-Time Query on Physical Standby' , '12.1'       , ' '       from dual union all
-SELECT 'Active Data Guard'                                   , 'Global Data Services'                                    , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Analytics'                                  , 'Data Mining'                                             , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Analytics'                                  , 'Data Mining'                                             , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'ADVANCED Index Compression'                              , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Advanced Index Compression'                              , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup HIGH Compression'                                 , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup HIGH Compression'                                 , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup LOW Compression'                                  , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup LOW Compression'                                  , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup MEDIUM Compression'                               , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup MEDIUM Compression'                               , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup ZLIB Compression'                                 , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Backup ZLIB Compression'                                 , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Data Guard'                                              , '11.2'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Data Guard'                                              , '12.1'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Flashback Data Archive'                                  , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Flashback Data Archive'                                  , '11.2.0.4'   , 'INVALID' from dual union all -- licensing required by Optimization for Flashback Data Archive
-SELECT 'Advanced Compression'                                , 'Flashback Data Archive'                                  , '12.1'       , 'INVALID' from dual union all -- licensing required by Optimization for Flashback Data Archive
-SELECT 'Advanced Compression'                                , 'HeapCompression'                                         , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'HeapCompression'                                         , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Heat Map'                                                , '12.1'       , ' '       from dual union all --
-SELECT 'Advanced Compression'                                , 'Hybrid Columnar Compression Row Level Locking'           , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Information Lifecycle Management'                        , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Advanced Network Compression Service'             , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Export)'                        , '11.2'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Export)'                        , '12.1'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Import)'                        , '11.2'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'Oracle Utility Datapump (Import)'                        , '12.1'       , 'C001'    from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Compression (user)'                           , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Compression (user)'                           , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Deduplication (user)'                         , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Compression'                                , 'SecureFile Deduplication (user)'                         , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Backup Encryption'                                       , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Backup Encryption'                                       , '12.1'       , 'INVALID' from dual union all -- licensing required only by encryption to disk
-SELECT 'Advanced Security'                                   , 'Data Redaction'                                          , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Encrypted Tablespaces'                                   , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Encrypted Tablespaces'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Export)'                        , '11.2'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Export)'                        , '12.1'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Import)'                        , '11.2'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'Oracle Utility Datapump (Import)'                        , '12.1'       , 'C002'    from dual union all
-SELECT 'Advanced Security'                                   , 'SecureFile Encryption (user)'                            , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'SecureFile Encryption (user)'                            , '12.1'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Transparent Data Encryption'                             , '11.2'       , ' '       from dual union all
-SELECT 'Advanced Security'                                   , 'Transparent Data Encryption'                             , '12.1'       , ' '       from dual union all
-SELECT 'Change Management Pack'                              , 'Change Management Pack'                                  , '11.2'       , ' '       from dual union all
-SELECT 'Configuration Management Pack for Oracle Database'   , 'EM Config Management Pack'                               , '11.2'       , ' '       from dual union all
-SELECT 'Data Masking Pack'                                   , 'Data Masking Pack'                                       , '11.2'       , ' '       from dual union all
-SELECT '.Database Gateway'                                   , 'Gateways'                                                , '12.1'       , ' '       from dual union all
-SELECT '.Database Gateway'                                   , 'Transparent Gateway'                                     , '12.1'       , ' '       from dual union all
-SELECT 'Database In-Memory'                                  , 'In-Memory Aggregation'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Database In-Memory'                                  , 'In-Memory Column Store'                                  , '12.1.0.2'   , 'BUG'     from dual union all
-SELECT 'Database Vault'                                      , 'Oracle Database Vault'                                   , '11.2'       , ' '       from dual union all
-SELECT 'Database Vault'                                      , 'Oracle Database Vault'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Database Vault'                                      , 'Privilege Capture'                                       , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'ADDM'                                                    , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'ADDM'                                                    , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline'                                            , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline'                                            , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline Template'                                   , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Baseline Template'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Report'                                              , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'AWR Report'                                              , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Automatic Workload Repository'                           , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Adaptive Thresholds'                            , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Adaptive Thresholds'                            , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Static Computations'                            , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Baseline Static Computations'                            , '12.1'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'Diagnostic Pack'                                         , '11.2'       , ' '       from dual union all
-SELECT 'Diagnostics Pack'                                    , 'EM Performance Page'                                     , '12.1'       , ' '       from dual union all
-SELECT '.Exadata'                                            , 'Exadata'                                                 , '11.2'       , ' '       from dual union all
-SELECT '.Exadata'                                            , 'Exadata'                                                 , '12.1'       , ' '       from dual union all
-SELECT '.GoldenGate'                                         , 'GoldenGate'                                              , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'Hybrid Columnar Compression'                             , '12.1'       , 'BUG'     from dual union all
-SELECT '.HW'                                                 , 'Hybrid Columnar Compression Row Level Locking'           , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'Sun ZFS with EHCC'                                       , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'ZFS Storage'                                             , '12.1'       , ' '       from dual union all
-SELECT '.HW'                                                 , 'Zone maps'                                               , '12.1'       , ' '       from dual union all
-SELECT 'Label Security'                                      , 'Label Security'                                          , '11.2'       , ' '       from dual union all
-SELECT 'Label Security'                                      , 'Label Security'                                          , '12.1'       , ' '       from dual union all
-SELECT 'Multitenant'                                         , 'Oracle Multitenant'                                      , '12.1'       , 'C003'    from dual union all -- licensing required only when more than one PDB containers are created
-SELECT 'Multitenant'                                         , 'Oracle Pluggable Databases'                              , '12.1'       , 'C003'    from dual union all -- licensing required only when more than one PDB containers are created
-SELECT 'OLAP'                                                , 'OLAP - Analytic Workspaces'                              , '11.2'       , ' '       from dual union all
-SELECT 'OLAP'                                                , 'OLAP - Analytic Workspaces'                              , '12.1'       , ' '       from dual union all
-SELECT 'OLAP'                                                , 'OLAP - Cubes'                                            , '12.1'       , ' '       from dual union all
-SELECT 'Partitioning'                                        , 'Partitioning (user)'                                     , '11.2'       , ' '       from dual union all
-SELECT 'Partitioning'                                        , 'Partitioning (user)'                                     , '12.1'       , ' '       from dual union all
-SELECT 'Partitioning'                                        , 'Zone maps'                                               , '12.1'       , ' '       from dual union all
-SELECT '.Pillar Storage'                                     , 'Pillar Storage'                                          , '12.1'       , ' '       from dual union all
-SELECT '.Pillar Storage'                                     , 'Pillar Storage with EHCC'                                , '12.1'       , ' '       from dual union all
-SELECT '.Provisioning and Patch Automation Pack'             , 'EM Standalone Provisioning and Patch Automation Pack'    , '11.2'       , ' '       from dual union all
-SELECT 'Provisioning and Patch Automation Pack for Database' , 'EM Database Provisioning and Patch Automation Pack'      , '11.2'       , ' '       from dual union all
-SELECT 'RAC or RAC One Node'                                 , 'Quality of Service Management'                           , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Clusters'                           , 'Real Application Clusters (RAC)'                         , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Clusters'                           , 'Real Application Clusters (RAC)'                         , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Clusters One Node'                  , 'Real Application Cluster One Node'                       , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Capture'                       , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Capture'                       , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Replay'                        , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'Database Replay: Workload Replay'                        , '12.1'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'SQL Performance Analyzer'                                , '11.2'       , ' '       from dual union all
-SELECT 'Real Application Testing'                            , 'SQL Performance Analyzer'                                , '12.1'       , ' '       from dual union all
-SELECT '.Secure Backup'                                      , 'Oracle Secure Backup'                                    , '12.1'       , 'INVALID' from dual union all  -- does not differentiate usage of Oracle Secure Backup Express, which is free
-SELECT 'Spatial and Graph'                                   , 'Spatial'                                                 , '11.2'       , 'INVALID' from dual union all  -- does not differentiate usage of Locator, which is free
-SELECT 'Spatial and Graph'                                   , 'Spatial'                                                 , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Automatic Maintenance - SQL Tuning Advisor'              , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Automatic SQL Tuning Advisor'                            , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Automatic SQL Tuning Advisor'                            , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Real-Time SQL Monitoring'                                , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Real-Time SQL Monitoring'                                , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Access Advisor'                                      , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Access Advisor'                                      , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Monitoring and Tuning pages'                         , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Profile'                                             , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Profile'                                             , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Tuning Advisor'                                      , '11.2'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Tuning Advisor'                                      , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'SQL Tuning Set (user)'                                   , '12.1'       , ' '       from dual union all
-SELECT 'Tuning Pack'                                         , 'Tuning Pack'                                             , '11.2'       , ' '       from dual union all
-SELECT '.WebLogic Server Management Pack Enterprise Edition' , 'EM AS Provisioning and Patch Automation Pack'            , '11.2'       , ' '       from dual union all
-select '' PRODUCT, '' FEATURE, '' MVERSION, '' CONDITION from dual
-),
-FUS as (
--- the current data set to be used: DBA_FEATURE_USAGE_STATISTICS or CDB_FEATURE_USAGE_STATISTICS for Container Databases(CDBs)
-select
-    -1 as CON_ID,
-    to_char(NULL) as CON_NAME,
-    -- Detect and mark with Y the current DBA_FUS data set = Most Recent Sample based on LAST_SAMPLE_DATE
-      case when DBID || '#' || VERSION || '#' || to_char(LAST_SAMPLE_DATE, 'YYYYMMDDHH24MISS') =
-                first_value (DBID    )         over (partition by -1 order by LAST_SAMPLE_DATE desc nulls last, DBID desc) || '#' ||
-                first_value (VERSION )         over (partition by -1 order by LAST_SAMPLE_DATE desc nulls last, DBID desc) || '#' ||
-                first_value (to_char(LAST_SAMPLE_DATE, 'YYYYMMDDHH24MISS'))
-                                               over (partition by -1 order by LAST_SAMPLE_DATE desc nulls last, DBID desc)
-           then 'Y'
-           else 'N'
-    end as CURRENT_ENTRY,
-    NAME            ,
-    LAST_SAMPLE_DATE,
-    DBID            ,
-    VERSION         ,
-    DETECTED_USAGES ,
-    TOTAL_SAMPLES   ,
-    CURRENTLY_USED  ,
-    FIRST_USAGE_DATE,
-    LAST_USAGE_DATE ,
-    AUX_COUNT       ,
-    FEATURE_INFO
-from DBA_FEATURE_USAGE_STATISTICS xy
-),
-PFUS as (
--- Product-Feature Usage Statitsics = DBA_FUS entries mapped to their corresponding database products
-select
-    CON_ID,
-    CON_NAME,
-    PRODUCT,
-    NAME as FEATURE_BEING_USED,
-    case  when CONDITION = 'BUG'
-               --suppressed due to exceptions/defects
-            then '3.SUPPRESSED_DUE_TO_BUG'
-          when detected_usages > 0               -- some usage detection - current or past
-           and(trim(CONDITION) is null
-               -- if special conditions (coded on the MAP.CONDITION column) are required, check if entries satisfy the condition
-               -- C001 = compression has been used
-               or CONDITION = 'C001' and regexp_like(to_char(FEATURE_INFO), 'compression used: *TRUE', 'i')
-               -- C002 = encryption has been used
-               or CONDITION = 'C002' and regexp_like(to_char(FEATURE_INFO), 'encryption used: *TRUE', 'i')
-               -- C003 = more than one PDB are created
-               or CONDITION = 'C003' and CON_ID=1 and AUX_COUNT > 1
-              )
-            then decode(CURRENT_ENTRY || '#' || CURRENTLY_USED, 'Y#TRUE', '6.CURRENT_USAGE', '4.PAST_USAGE')
-          when detected_usages > 0               -- some usage detection - current or past
-           and(
-               -- if special counter conditions (coded on the MAP.CONDITION column) are required, check if the counter value is not 0
-               -- C001 = compression has been used at least once
-                  CONDITION = 'C001' and regexp_like(to_char(FEATURE_INFO), 'compression used:[ 0-9]*[1-9][ 0-9]*time', 'i')
-               -- C002 = encryption has been used at least once
-               or CONDITION = 'C002' and regexp_like(to_char(FEATURE_INFO), 'encryption used:[ 0-9]*[1-9][ 0-9]*time', 'i')
-              )
-            then decode(CURRENT_ENTRY || '#' || CURRENTLY_USED, 'Y#TRUE', '5.PAST_OR_CURRENT_USAGE', '4.PAST_USAGE') -- FEATURE_INFO counters indicate current or past usage
-          when CURRENT_ENTRY = 'Y' then '2.NO_CURRENT_USAGE'   -- detectable feature shows no current usage
-          else '1.NO_PAST_USAGE'
-    end as USAGE,
-    LAST_SAMPLE_DATE,
-    DBID            ,
-    VERSION         ,
-    DETECTED_USAGES ,
-    TOTAL_SAMPLES   ,
-    CURRENTLY_USED  ,
-    FIRST_USAGE_DATE,
-    LAST_USAGE_DATE
-from (
-select m.PRODUCT, m.CONDITION, m.MVERSION,
-       first_value (m.MVERSION) over (partition by f.CON_ID, f.NAME, f.VERSION order by m.MVERSION desc nulls last) as MMVERSION,
-       f.*
-  from MAP m
-  join FUS f on m.FEATURE = f.NAME and m.MVERSION = substr(f.VERSION, 1, length(m.MVERSION))
-  where nvl(f.TOTAL_SAMPLES, 0) > 0            -- ignore features that have never been sampled
-)
-  where MVERSION = MMVERSION              -- retain only the MAP entry that mathces the most to the DBA_FUS version = the \"most matching version\"
-    and nvl(CONDITION, '-') != 'INVALID'  -- ignore entries that are invalidated by bugs or known issues or correspond to features which became free of charge
-    and not (CONDITION = 'C003' and CON_ID not in (0, 1)) -- multiple PDBs are visible only in CDB\$ROOT
-)
-select
-    grouping_id(CON_ID) as gid,
-    CON_ID   ,
-    decode(grouping_id(CON_ID), 1, '--ALL--', max(CON_NAME)) as CON_NAME,
-    PRODUCT  ,
-    decode(max(USAGE),
-          '1.NO_PAST_USAGE'        , 'NO_USAGE'             ,
-          '2.NO_CURRENT_USAGE'     , 'NO_USAGE'             ,
-          '3.SUPPRESSED_DUE_TO_BUG', 'SUPPRESSED_DUE_TO_BUG',
-          '4.PAST_USAGE'           , 'PAST_USAGE'           ,
-          '5.PAST_OR_CURRENT_USAGE', 'PAST_OR_CURRENT_USAGE',
-          '6.CURRENT_USAGE'        , 'CURRENT_USAGE'        ,
-          'UNKNOWN') as USAGE,
-    nvl(to_char(max(LAST_SAMPLE_DATE), 'yyyy-mm-dd HH24:MI:SS'), '-') as LAST_SAMPLE_DATE,
-    nvl(to_char(min(FIRST_USAGE_DATE), 'yyyy-mm-dd HH24:MI:SS'), '-') as FIRST_USAGE_DATE,
-    nvl(to_char(max(LAST_USAGE_DATE), 'yyyy-mm-dd HH24:MI:SS'), '-')  as LAST_USAGE_DATE
-  from PFUS
-  where USAGE in ('2.NO_CURRENT_USAGE', '4.PAST_USAGE', '5.PAST_OR_CURRENT_USAGE', '6.CURRENT_USAGE')   -- ignore '1.NO_PAST_USAGE', '3.SUPPRESSED_DUE_TO_BUG'
-  group by rollup(CON_ID), PRODUCT
-  having not (max(CON_ID) in (-1, 0) and grouping_id(CON_ID) = 1)            -- aggregation not needed for non-container databases
-order by GID desc, CON_ID, decode(substr(PRODUCT, 1, 1), '.', 2, 1), PRODUCT
-;
+  if (! open(OPUSFILE, "<", $opusfile) ) {
+    print "Cannot open file $opusfile for reading!\n";
+    return(undef);
+  }
 
-  ";
+  my $in_table = 0;
+  my $headline = "";
+  my @report_lines = ();
 
-  if (! do_sql($sql)) {return(0)}
+  while (my $line = <OPUSFILE>) {
+    chomp $line;
+    # -----
+    # Bail out, if the end of the table has been reached.
+    if ( $headline && $in_table && $line eq "" ) { last }
+    # print "[$line]\n";
 
-  my @L = ();
-  get_value_lines(\@L, $TMPOUT1);
+    # -----
+    $in_table = 0;
+    # If the line contains |, then you are processing a table section.
+    if ( $line =~ /\|/ ) { $in_table = 1 }
 
-  foreach my $i (@L) {
-    my @E = split($DELIM, $i);
+    # -----
+    # If specific expressions appear at the beginning of the line
+    # then you are processing a new headline.
+    # Do NOT abbreviate the expressions!
+
+    # if ($line =~ /^MULTITENANT INFORMATION|^PRODUCT USAGE|^FEATURE USAGE DETAILS/) {
+    if ($line =~ /^PRODUCT USAGE/) {
+      # Start a new report (or report table)
+      $headline = $line;
+      $in_table = 0;
+    }
+
+    # -----
+    # ++++++++++++++++++++++++++++++++++++++++++++++++...
+    # PRODUCT USAGE
+    # ++++++++++++++++++++++++++++++++++++++++++++++++...
+    # 
+    # PRODUCT                                            |USAGE                   |LAST_SAMPLE_DATE   |FIRST_USAGE_DATE   |LAST_USAGE_DATE
+    # ---------------------------------------------------|------------------------|-------------------|-------------------|-------------------
+    # Active Data Guard                                  |NO_USAGE                |2017.07.08_09.50.28|                   |
+    # Advanced Analytics                                 |NO_USAGE                |2017.07.08_09.50.28|                   |
+    # Advanced Compression                               |NO_USAGE                |2017.07.08_09.50.28|                   |
+    # Advanced Security                                  |NO_USAGE                |2017.07.08_09.50.28|                   |
+    # Database In-Memory                                 |NO_USAGE                |2017.07.08_09.50.28|                   |
+    # Database Vault                                     |NO_USAGE                |2017.07.08_09.50.28|                   |
+    # Diagnostics Pack                                   |CURRENT_USAGE           |2017.07.08_09.50.28|2016.10.06_04.38.40|2017.07.08_09.50.28
+
+    # If you have a non-empty headline
+    if ($headline) {
+      # and if you are processing the lines of a table
+      if ($in_table) {
+        if ($line =~ /---/ ) {
+          # Ignore the lines with ---
+        } else {
+          # Then add this line to the resulting array of report lines
+          # print "[$line]\n";
+          push(@report_lines, $line);
+        }
+      }
+    }
+
+  } # while
+
+  close(OPUSFILE);
+
+  foreach my $i (@report_lines) {
+    my @E = split('\|', $i);
     @E = map(trim($_), @E);
     my $p =  $E[0];
     my $u =  $E[1];
@@ -1641,12 +1468,10 @@ order by GID desc, CON_ID, decode(substr(PRODUCT, 1, 1), '.', 2, 1), PRODUCT
     }
   } # foreach
 
-  # Report
-  # prepend a title line
-  unshift(@L, "product  $DELIM  usage  $DELIM  last sample date  $DELIM first usage date $DELIM last usage date");
+  $HtmlReport->add_heading(2, "Product Usage", "_default_");
+  $HtmlReport->add_paragraph('p', "Please refer to MOS DOC ID 1317265.1 and 1309070.1 for more information.");
 
-  $HtmlReport->add_heading(2, "Product (Option) Usage", "_default_");
-  $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
+  $HtmlReport->add_table(\@report_lines, '\|', "LLLLL", 1);
   $HtmlReport->add_goto_top("top");
 
 } # product_usage11_2_0_4
@@ -1703,6 +1528,10 @@ sub part_1 {
   if (! $my_instance_ip) { $my_instance_ip = $NA }
   append2inventory("DBINSTANCEIP", $my_instance_ip);
 
+  my $my_instance_port = get_instance_port();
+  if (! $my_instance_port) { $my_instance_port = $NA }
+  append2inventory("DBINSTANCEPORT", $my_instance_port);
+
   my $my_database_name = trim(get_value($TMPOUT1, $DELIM, "database_name"));
 
   my $database_created = trim(get_value($TMPOUT1, $DELIM, "created"));
@@ -1719,19 +1548,20 @@ sub part_1 {
 
   my $aref = [
     "Instance name        ! $my_instance"
-  , "Oracle Version       ! $ORACLE_VERSION"
   , "Database name        ! $my_database_name"
   , "Database unique name ! " . trim(get_value($TMPOUT1, $DELIM, "DB_UNIQUE_NAME"))
+  , "Oracle Version       ! $ORACLE_VERSION"
   , "DBID                 ! $dbid"
+  , "Database created     ! $database_created"
   , "Database role        ! " . trim(get_value($TMPOUT1, $DELIM, "DATABASE_ROLE"))
   , "Archive log mode     ! " . trim(get_value($TMPOUT1, $DELIM, "LOG_MODE"))
   , "Flashback            ! " . trim(get_value($TMPOUT1, $DELIM, "FLASHBACK_ON"))
   , "Dataguard status     ! " . trim(get_value($TMPOUT1, $DELIM, "GUARD_STATUS"))
-  , "Database created     ! $database_created"
-  , "Instance startup at  ! " . trim(get_value($TMPOUT1, $DELIM, "instance startup at"))
   , "Running on host      ! $MY_HOST"
-  , "Listening on IP      ! $my_instance_ip"
   , "Host platform        ! " . trim(get_value($TMPOUT1, $DELIM, "platform"))
+  , "Instance startup at  ! " . trim(get_value($TMPOUT1, $DELIM, "instance startup at"))
+  , "Listening on IP      ! $my_instance_ip"
+  , "Listening on port    ! $my_instance_port"
   ];
 
   $HtmlReport->add_table($aref, "!", "LL", 0);
@@ -2651,6 +2481,7 @@ sub send2uls {
     return(undef);
   }
   # print "new_filename=$new_filename\n";
+  push(@TEMPFILES, $new_filename);
 
   # Has the extension changed? (Because of compression)
   my ($new_filename_ext) = $new_filename =~ /(\.[^.]+)$/;
@@ -2784,7 +2615,6 @@ sub sendinventory2uls {
 # $CURRPROG = basename($0, ".pl");   # extension is removed
 $CURRPROG = basename($0);
 my $currdir = dirname($0);
-my $start_secs = time;
 
 my $initdir = $ENV{"TMP"} || $ENV{"TEMP"} || '/tmp';
 my $initial_logfile = "${initdir}/${CURRPROG}_$$.tmp";
@@ -2903,6 +2733,7 @@ print "WORKFILEPREFIX=$WORKFILEPREFIX\n";
 
 $LOCKFILE = "${WORKFILEPREFIX}.LOCK";
 print "LOCKFILE=$LOCKFILE\n";
+push(@TEMPFILES, $LOCKFILE);
 
 if (! lockfile_build($LOCKFILE)) {
   # LOCK file exists and process is still running, abort silently.
@@ -2957,7 +2788,7 @@ title("Set up ULS");
 # Initialize uls with basic settings
 uls_init(\%ULS);
 
-my $d = iso_datetime($start_secs);
+my $d = iso_datetime($STARTSECS);
 $d =~ s/\d{1}$/0/;
 
 set_uls_timestamp($d);
@@ -2975,7 +2806,7 @@ use sigtrap 'handler' => \&signal_handler, 'normal-signals', 'error-signals';
 uls_timing({
     teststep  => $IDENTIFIER
   , detail    => "start-stop"
-  , start     => iso_datetime($start_secs)
+  , start     => iso_datetime($STARTSECS)
 });
 
 # Send the ULS data up to now to have that for sure.
@@ -2984,11 +2815,20 @@ uls_flush(\%ULS);
 # -----
 # Define some temporary file names
 $TMPOUT1 = "${WORKFILEPREFIX}_1.tmp";
+push(@TEMPFILES, $TMPOUT1);
 print "TMPOUT1=$TMPOUT1\n";
+
 $TMPOUT2 = "${WORKFILEPREFIX}_2.tmp";
+push(@TEMPFILES, $TMPOUT2);
 print "TMPOUT2=$TMPOUT2\n";
+
 $HTMLOUT1 = "${WORKFILEPREFIX}_1.html";
+push(@TEMPFILES, $HTMLOUT1);
 print "HTMLOUT1=$HTMLOUT1\n";
+
+$ERROUTFILE = "${WORKFILEPREFIX}_errout.log";
+push(@TEMPFILES, $ERROUTFILE);
+print "ERROUTFILE=$ERROUTFILE\n";
 
 print "DELIM=$DELIM\n";
 
@@ -3010,14 +2850,7 @@ $SQLPLUS_COMMAND = $CFG{"ORACLE.SQLPLUS_COMMAND"} || $SQLPLUS_COMMAND;
 
 if (! oracle_available() ) {
   output_error_message("$CURRPROG: Error: Oracle database is not available => aborting script.");
-
-  clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
-
-  send_runtime($start_secs);
-  uls_timing($IDENTIFIER, "start-stop", "stop");
-  uls_flush(\%ULS);
-
-  exit(1);
+  end_script(1);
 }
 
 
@@ -3084,33 +2917,16 @@ send2uls($HTMLOUT1);
 sendinventory2uls($TMPOUT2);
 # print "$INVENTORY\n";
 
-
-
-# Any errors will have sent already its error messages.
-# This is just the final message.
-uls_value($IDENTIFIER, "message", $MSG, " ");
-# uls_value($IDENTIFIER, "exit value", $EXIT_VALUE, "#");
-
+# -------------------------------------------------------------------
 send_doc($CURRPROG, $IDENTIFIER);
 
-send_runtime($start_secs);
-uls_timing($IDENTIFIER, "start-stop", "stop");
+if ($MSG eq "OK") {end_script(0)}
 
-# Do not transfer to ULS
-# uls_flush(\%ULS, 1);
-#
-# Transfer to ULS
-uls_flush(\%ULS);
+end_script(1);
 
-# -------------------------------------------------------------------
-# Added possible compressed files
-clean_up($TMPOUT1, $TMPOUT2, $HTMLOUT1, "$HTMLOUT1.bz2", "$HTMLOUT1.gz", "$HTMLOUT1.xz", $LOCKFILE);
-
-title("END");
-
-if ($MSG eq "OK") {exit(0)}
-
-exit(1);
+# -----
+# Script should never arrive here.
+exit(255);
 
 
 #########################

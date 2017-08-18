@@ -189,6 +189,11 @@
 #   Added tz() that returns the timezone as {+|-}hh:mm for a number of seconds.
 #   Removed log10() as it is contained in POSIX.
 #
+# 2017-07-06, 0.42, roveda:
+#   Added appendfile2file() and try_to_compress().
+#
+#
+#
 # ============================================================
 
 use strict;
@@ -207,9 +212,9 @@ our(@ISA, @EXPORT, $VERSION);
 require Exporter;
 @ISA = qw(Exporter);
 
-@EXPORT = qw(args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs local_tz_offset lockfile_build make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim tz);
+@EXPORT = qw(appendfile2file args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs local_tz_offset lockfile_build make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim try_to_compress tz);
 
-$VERSION = 0.41;
+$VERSION = 0.42;
 
 # This one is used as timestamp marker in work files.
 my $TIMESTAMP_TXT = "T_I_M_E_S_T_A_M_P";
@@ -224,6 +229,62 @@ my $INCLUDE = "%include";
 my $INCLUDE_SEP = "%include_separator";
 
 srand(time);
+
+# ------------------------------------------------------------
+sub appendfile2file {
+  # appendfile2file(<infile>, <outfile>);
+
+  my ($infile, $outfile) = @_;
+
+  my ($in, $out);
+
+  if (! open($out, ">>:utf8", $outfile)) {
+    print STDERR sub_name() . ": Error: Cannot open '$outfile' for writing!\n";
+    return(1);
+  }
+
+  if (! open($in, "<:utf8", $infile)) {
+    print STDERR sub_name() . ": Error: Cannot open '$infile' for reading!\n";
+    close($out);
+    return(1);
+  }
+
+  while ( my $line = <$in> ) { print $out $line }
+
+  # Close file
+  if (! close($in)) {
+    print STDERR sub_name() . ": Error: Cannot close '$infile'!\n";
+    return(1);
+  }
+
+  if (! close($out)) {
+    print STDERR sub_name() . ": Error: Cannot close '$outfile'!\n";
+    return(1);
+  }
+
+  return(0);
+
+} # appendfile2file
+
+
+# ------------------------------------------------------------
+sub try_to_compress {
+  # $appended_extension = try_to_compress(filename);
+  #
+  # Tries to compress the given file by checking
+  # the presence of: xz, bzip2 and gzip.
+  #
+  # It returns the new extension or "" if no .
+
+  my ($filename) = @_;
+
+  if (exec_os_command("xz $filename")) { return(".xz") }
+  if (exec_os_command("bzip2 $filename")) { return(".bz2") }
+  if (exec_os_command("gzip $filename")) { return(".gz") }
+  return("");
+
+} # try_to_compress
+
 
 # ------------------------------------------------------------
 sub trim {

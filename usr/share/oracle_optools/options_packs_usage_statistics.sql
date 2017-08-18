@@ -94,7 +94,7 @@ col VALUE                  format a20 wrap
 
 alter session set nls_date_format='YYYY.MM.DD_HH24.MI.SS';
 
-spool options_packs_usage_statistics.txt
+spool /tmp/options_packs_usage_statistics.txt
 
 prompt OVERALL INFORMATION
 
