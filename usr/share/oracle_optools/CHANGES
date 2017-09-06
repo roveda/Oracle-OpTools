@@ -5,6 +5,12 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2017-09-06, roveda
+tar and remove the old oracle_tools directory to avoid confusion and mix-up with new rpm.
+
+2017-08-18, roveda
+Changed ora_dbinfo to use the sql script options_packs_usage_statistics.sql supplied by Oracle support.
+
 2017-06-19, roveda
   ora_grants.pl: Ignoring temporary compression advisor tables when granting privilges.
 

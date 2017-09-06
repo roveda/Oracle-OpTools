@@ -96,7 +96,7 @@
 #   Fixed the age in 'purge -age' to minutes derived from the given number of days.
 #   Implemented workaround for Oracle bug concerning adr_base which is 
 #   NOT derived from diagnostic_dest but from a central file in ORACLE_HOME.
-#   Therefore not correct if multiple instance are present on one server.
+#   Therefore not correct if multiple instances are present on one server.
 #   Fixed the broken support of sid specific configuration file.
 #
 #
