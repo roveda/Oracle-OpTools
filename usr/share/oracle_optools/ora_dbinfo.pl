@@ -180,6 +180,10 @@
 #   That should result in less maintenance work for this script.
 #   REMEMBER: the path of the spool file must be changed in the options_packs_usage_statistics.sql script!
 #
+# 2017-09-19      roveda      0.31
+#   Debugged multitenant_info(), feature_usage_details11_2_0_4() and product_usage11_2_0_4() 
+#   to even work the first time it is ever executed.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -197,7 +201,7 @@ use Misc 0.41;
 use Uls2 1.16;
 use HtmlDocument;
 
-my $VERSION = 0.30;
+my $VERSION = 0.31;
 
 # ===================================================================
 # The "global" variables
@@ -210,6 +214,9 @@ my $STARTSECS = time;
 
 # The default command to execute sql commands.
 my $SQLPLUS_COMMAND = 'sqlplus -S "/ as sysdba"';
+
+# SQL script from Oracle support to gather option pack usages
+my $OPUSSQL = dirname($0) . "/options_packs_usage_statistics.sql";
 
 # Keeps the list of temporary files, to be purged at script end
 # push filenames onto this array.
@@ -1103,10 +1110,13 @@ sub multitenant_info {
         print "failed.\n";
         output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
       }
-      system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+      # system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+      exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
     } else { 
       print "File '$opusfile' is younger than 5 minutes, use it.\n";
     }
+  } else {
+    exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
   }
 
   if (! open(OPUSFILE, "<", $opusfile) ) {
@@ -1215,10 +1225,13 @@ sub feature_usage_details11_2_0_4 {
         print "failed.\n";
         output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
       }
-      system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+      # system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+      exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
     } else {
       print "File '$opusfile' is younger than 5 minutes, use it.\n";
     }
+  } else {
+    exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
   }
 
   if (! open(OPUSFILE, "<", $opusfile) ) {
@@ -1384,10 +1397,13 @@ sub product_usage11_2_0_4 {
         print "failed.\n";
         output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
       }
-      system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+      # system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
+      exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
     } else {
       print "File '$opusfile' is younger than 5 minutes, use it.\n";
     }
+  } else {
+    exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
   }
 
   if (! open(OPUSFILE, "<", $opusfile) ) {
