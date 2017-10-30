@@ -5,6 +5,10 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2017-10-30, roveda
+  Corrected the check for proper parameters in crontab_create.sh
+  Added ora_awr_addm.sh and ora_dbinfo.sh for convenience.
+
 2017-09-19, roveda
   Debugged the usage of the options_packs_usage_statistics.sql
 

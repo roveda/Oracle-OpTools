@@ -93,15 +93,27 @@
 #   therefor appear under 'today' in ULS which is the default. An explicit 
 #   change to 'yesterday' was necessary previously. 
 #
+# 2017-10-04      roveda      0.13
+#   Set the permissions to world-readable. Added the check for being root.
+#
+# 2017-10-30      roveda      0.14
+#   Check for proper number of parameters corrected.
+#
 # -----------------------------------------------------------------------------
 
 USAGE="crontab_create.sh  <oracle_environment_script>  <destination_dir>  [ SILENT ]"
+
+
+if [ $EUID -ne 0 ]; then
+   echo "$0: ERROR: This script can only be run as root => ABORTING"
+   exit 1
+fi
 
 # -----
 # Check number of arguments
 
 if [[ $# -lt 2 ]] ; then
-  echo "Error: missing command line parameter!"
+  echo "ERROR: Wrong number of command line parameters => ABORTING"
   echo "$USAGE"
   exit 1
 fi
@@ -111,14 +123,14 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echo "ERROR: environment script '$ORAENV' not found => ABORTING"
   exit 1
 fi
 
 . "$ORAENV"
 if [ $? -ne 0 ] ; then
   echo
-  echo "Error: Cannot source Oracle's environment script '$ORAENV' => abort"
+  echo "ERROR: Cannot source Oracle's environment script '$ORAENV' => ABORTING"
   echo
   exit 1
 fi
@@ -131,7 +143,7 @@ if [ -d "$DESTDIR" ] && [ -x "$DESTDIR" ] && [ -w "$DESTDIR" ] ; then
   :
 else
   echo
-  echo "Error: Cannot access or write to directory '$DESTDIR' => abort"
+  echo "ERROR: Cannot access or write to directory '$DESTDIR' => ABORTING"
   echo
   exit 1
 fi
@@ -228,6 +240,8 @@ $M $H * * *           oracle /usr/share/oracle_optools/backup_database.sh $ORAEN
 
 EOF
 
+chmod 644 "$CRONFILE"
+
 echo
 echo "crontab file '$CRONFILE' created."
 echo
@@ -241,16 +255,18 @@ if [ "$SILENT" != "yes" ] ; then
   echo "-------------------------------------------------------------------------------"
   cat $CRONFILE
   echo "-------------------------------------------------------------------------------"
+  echo
 fi
 
+# This is obsolete:
 # -----
 # copy command
-
-if [ "$SILENT" != "yes" ] ; then
-  echo
-  echo "Copy it as root:"
-  echo
-  echo "cp \"$CRONFILE\" /etc/cron.d/"
-  echo
-fi
+#
+#if [ "$SILENT" != "yes" ] ; then
+#  echo
+#  echo "Copy it as root:"
+#  echo
+#  echo "cp \"$CRONFILE\" /etc/cron.d/"
+#  echo
+#fi
 

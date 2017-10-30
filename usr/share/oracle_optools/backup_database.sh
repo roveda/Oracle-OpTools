@@ -125,7 +125,7 @@ fi
 # BUT:
 #   The RMAN commands in the [ORARMAN] section determine the ACTUAL ACTIONS
 #   (the actual RMAN commands) which are executed during the script execution.
-#   The parameter is only an arbirtrary text expression.
+#   The parameter is only an arbitrary text expression.
 
 # Execute the RMAN commands of section [ORARMAN] and parameter LEVEL0
 # (or use the given second command line parameter as parameter)

@@ -173,6 +173,7 @@
 #   Instead of a script result message as a sequence of single string lines
 #   a message file is created and finally compressed and sent to ULS but 
 #   only if an error has occured.
+#   Retrieving the IP address and the port from the output of tnsping <sid>.
 #
 # 2017-08-18      roveda      0.30
 #   Use now the Oracle sql script options_packs_usage_statistics.sql as delivered.
