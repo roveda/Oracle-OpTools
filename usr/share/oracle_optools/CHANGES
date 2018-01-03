@@ -5,6 +5,9 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2017-12-28, roveda
+  Added support for unified auditing in ora_housekeeping.pl
+
 2017-10-30, roveda
   Corrected the check for proper parameters in crontab_create.sh
   Added ora_awr_addm.sh and ora_dbinfo.sh for convenience.
