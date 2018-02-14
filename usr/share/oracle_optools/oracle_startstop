@@ -64,10 +64,18 @@
 #   You should always run new scripts on a test instance initially.
 #
 # ---------------------------------------------------------
+# Versions:
 #
-# 2016-02-18 roveda: changed from sudo to su, works on more flavours of Linux
-# 2016-07-01 roveda: command line arguments added.
-# 2017-01-13 roveda: Command line parameters changed.
+# date            name        version
+# ----------      ----------  -------
+# 2016-02-18      roveda      0.01
+#   Changed from sudo to su, works on more flavours of Linux
+#
+# 2016-07-01      roveda      0.02
+#   Command line arguments added.
+#
+# 2017-01-13      roveda      0.03
+#   Command line parameters changed.
 #
 # -------------------------------------------------------------------
 

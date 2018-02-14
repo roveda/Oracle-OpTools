@@ -3,7 +3,7 @@
 # backup_redologs.sh - backup the redo logs regularly
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2017, roveda
+# Copyright 2016 - 2018, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -55,6 +55,10 @@
 # 2017-02-01      roveda      0.01
 #   Fixed the missing usage of the environment script given as parameter.
 #
+# 2018-02-14      roveda      0.02
+#   Changed check for successful sourcing the environment to [ -z "$ORACLE_SID" ]
+#   instead of [ $? -ne 0 ] (what does not work).
+#
 # ---------------------------------------------------------
 
 
@@ -72,9 +76,9 @@ if [[ ! -f "$ORAENV" ]] ; then
 fi
 
 . $ORAENV
-if [ $? -ne 0 ] ; then
+if [[ -z "$ORACLE_SID" ]] ; then
   echo
-  echo "Error: Cannot source Oracle's environment script '$ORAENV' => abort"
+  echo "Error: the Oracle environment is not set up correctly => aborting script"
   echo
   exit 1
 fi

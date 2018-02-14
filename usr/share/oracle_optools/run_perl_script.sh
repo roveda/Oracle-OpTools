@@ -3,7 +3,7 @@
 # run_perl_script.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016, roveda
+# Copyright 2016 - 2018, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -64,6 +64,10 @@
 # 2017-01-30      roveda      0.02
 #   Changed some text.
 #
+# 2018-02-14      roveda      0.03
+#   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
+#   instead of [ $? -ne 0 ] (what does not work).
+#
 # ===================================================================
 
 
@@ -94,9 +98,9 @@ if [[ ! -f "$ORAENV" ]] ; then
 fi
 
 . "$ORAENV"
-if [ $? -ne 0 ] ; then
+if [[ -z "$ORACLE_SID" ]] ; then
   echo
-  echo "Error: Cannot source environment script '$ORAENV' => abort"
+  echo "Error: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 

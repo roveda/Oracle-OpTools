@@ -5,6 +5,10 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2018-02-14, roveda
+  Changed the checks for successful sourcing the environment in every shell script 
+  to [[ -z "$ORACLE_SID" ]] instead of [ $? -ne 0 ] (what does not work).
+
 2017-12-28, roveda
   Added support for unified auditing in ora_housekeeping.pl
 

@@ -3,7 +3,7 @@
 # crontab_create.sh - create a default crontab file for the Oracle OpTools
 #
 # ---------------------------------------------------------
-# Copyright 2017, roveda
+# Copyright 2017 - 2018, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -99,6 +99,10 @@
 # 2017-10-30      roveda      0.14
 #   Check for proper number of parameters corrected.
 #
+# 2018-02-14      roveda      0.15
+#   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
+#   instead of [ $? -ne 0 ] (what does not work).
+#
 # -----------------------------------------------------------------------------
 
 USAGE="crontab_create.sh  <oracle_environment_script>  <destination_dir>  [ SILENT ]"
@@ -128,9 +132,9 @@ if [[ ! -f "$ORAENV" ]] ; then
 fi
 
 . "$ORAENV"
-if [ $? -ne 0 ] ; then
+if [[ -z "$ORACLE_SID" ]] ; then
   echo
-  echo "ERROR: Cannot source Oracle's environment script '$ORAENV' => ABORTING"
+  echo "Error: the Oracle environment is not set up correctly => aborting script"
   echo
   exit 1
 fi
