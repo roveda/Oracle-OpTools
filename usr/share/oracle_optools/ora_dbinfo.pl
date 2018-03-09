@@ -3,7 +3,7 @@
 #   ora_dbinfo.pl - collect information about an Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2011 - 2017, roveda
+# Copyright 2011-2018, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -185,6 +185,9 @@
 #   Debugged multitenant_info(), feature_usage_details11_2_0_4() and product_usage11_2_0_4() 
 #   to even work the first time it is ever executed.
 #
+# 2018-03-08      roveda      0.32
+#   Added one more pipe character to each line of the options_packs_usage_statistics output.
+#   The resulting tables will be complete in means of empty cells. 
 #
 #   Change also $VERSION later in this script!
 #
@@ -202,7 +205,7 @@ use Misc 0.41;
 use Uls2 1.16;
 use HtmlDocument;
 
-my $VERSION = 0.31;
+my $VERSION = 0.32;
 
 # ===================================================================
 # The "global" variables
@@ -1290,7 +1293,7 @@ sub feature_usage_details11_2_0_4 {
         } else {
           # Then add this line to the resulting array of report lines
           # print "[$line]\n";
-          push(@report_lines, $line);
+          push(@report_lines, "$line |");
         }
       }
     }
@@ -1464,7 +1467,7 @@ sub product_usage11_2_0_4 {
         } else {
           # Then add this line to the resulting array of report lines
           # print "[$line]\n";
-          push(@report_lines, $line);
+          push(@report_lines, "$line |");
         }
       }
     }

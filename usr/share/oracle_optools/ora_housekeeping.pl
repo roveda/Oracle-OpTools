@@ -3,7 +3,7 @@
 # ora_housekeeping.pl - purge old audit entries
 #
 # ---------------------------------------------------------
-# Copyright 2016, 2017, roveda
+# Copyright 2016 - 2018, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -102,6 +102,13 @@
 # 2017-12-28      roveda      0.09
 #   Added the purging of old audit entries if unified auditing is enabled.
 #
+# 2018-02-15      roveda      0.10
+#   Changed the deletion of unified audit entries.
+#
+# 2018-03-09      roveda      0.11
+#   Unified auditing now has an own parameter for how long the entries 
+#   have to be kept on the local database.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -118,7 +125,7 @@ use lib ".";
 use Misc 0.40;
 use Uls2 1.15;
 
-my $VERSION = 0.09;
+my $VERSION = 0.11;
 
 # ===================================================================
 # The "global" variables
@@ -614,20 +621,20 @@ sub purge_unified_audit_entries {
   if ($V !~ /TRUE/ ) { return(1) }
 
   # -----
-  my $default_keep_for_days = 90;
+  my $default_keep_for_days = 30;
 
-  my $keep_for_days = $CFG{"ORA_HOUSEKEEPING.KEEP_AUDIT_ENTRIES_FOR"} || $default_keep_for_days;
+  my $keep_for_days = $CFG{"ORA_HOUSEKEEPING.KEEP_UNIFIED_AUDIT_ENTRIES_FOR"} || $default_keep_for_days;
   if ( $keep_for_days !~ /\d+/ ) {
-    output_error_message(sub_name() . ": Error: The parameter KEEP_AUDIT_ENTRIES_FOR is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
+    output_error_message(sub_name() . ": Error: The parameter KEEP_UNIFIED_AUDIT_ENTRIES_FOR is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
     $keep_for_days = $default_keep_for_days;
   }
   print "Keeping the unified audit entries for: $keep_for_days days.\n";
 
   $sql = "
-    select 'OLDEST_ENTRY (before purge): ' || to_char(min(EVENT_TIMESTAMP), 'yyyy-mm-dd HH24:MI:SS') from UNIFIED_AUDIT_TRAIL;
-
     DECLARE
       unified_auditing varchar(30);
+      oldest_entry date;
+      keep_for_days number := $keep_for_days;
     BEGIN
       select upper(value) into unified_auditing from v\$option where lower(parameter) = 'unified auditing';
 
@@ -637,25 +644,33 @@ sub purge_unified_audit_entries {
 
         DBMS_AUDIT_MGMT.FLUSH_UNIFIED_AUDIT_TRAIL;
 
-        -- Set timestamp for oldest audit entry to keep
-        DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(
-            audit_trail_type     => DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
-          , last_archive_time    => SYSTIMESTAMP - $keep_for_days
-          , CONTAINER => DBMS_AUDIT_MGMT.CONTAINER_CURRENT
-        );
+        select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
+        dbms_output.put_line('OLDEST_ENTRY (before purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
 
-        -- purge the entries
-        DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(
-            AUDIT_TRAIL_TYPE           =>  DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
-          , USE_LAST_ARCH_TIMESTAMP    =>  TRUE
-        );
+        if oldest_entry < (SYSTIMESTAMP - keep_for_days) then
 
+          -- Set timestamp for oldest audit entry to keep
+          DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(
+              audit_trail_type     => DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
+            , last_archive_time    => SYSTIMESTAMP - keep_for_days
+            , CONTAINER => DBMS_AUDIT_MGMT.CONTAINER_CURRENT
+          );
+
+          -- purge the entries
+          DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(
+              AUDIT_TRAIL_TYPE           =>  DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
+            , USE_LAST_ARCH_TIMESTAMP    =>  TRUE
+          );
+        ELSE
+          dbms_output.put_line('No audit entries found older than ' || to_char(keep_for_days) || ' days (' || to_char(SYSTIMESTAMP - keep_for_days, 'yyyy-mm-dd HH24:MI:SS') || ').');
       END IF;
+
+        select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
+        dbms_output.put_line('OLDEST_ENTRY (after purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
 
     END;
     /
 
-    select 'OLDEST_ENTRY (after purge): ' || to_char(min(EVENT_TIMESTAMP), 'yyyy-mm-dd HH24:MI:SS') from UNIFIED_AUDIT_TRAIL;
   ";
   # There are circumstances that keep old entries although they should be purged.
   # A solution is still work in progress.

@@ -5,6 +5,12 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2018-03-08, roveda
+  Implemented workaround for empty cells in product and feature usage of ora_dbinfo.
+
+2018-02-15, roveda
+  Changed the deletion of unified audit entries in ora_housekeeping.pl
+
 2018-02-14, roveda
   Changed the checks for successful sourcing the environment in every shell script 
   to [[ -z "$ORACLE_SID" ]] instead of [ $? -ne 0 ] (what does not work).
