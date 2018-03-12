@@ -109,6 +109,9 @@
 #   Unified auditing now has an own parameter for how long the entries 
 #   have to be kept on the local database.
 #
+# 2018-03-11      roveda      0.12
+#   Missing END IF corrected.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -122,10 +125,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.42;
+use Uls2 1.16;
 
-my $VERSION = 0.11;
+my $VERSION = 0.12;
 
 # ===================================================================
 # The "global" variables
@@ -663,6 +666,7 @@ sub purge_unified_audit_entries {
           );
         ELSE
           dbms_output.put_line('No audit entries found older than ' || to_char(keep_for_days) || ' days (' || to_char(SYSTIMESTAMP - keep_for_days, 'yyyy-mm-dd HH24:MI:SS') || ').');
+        END IF;
       END IF;
 
         select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
