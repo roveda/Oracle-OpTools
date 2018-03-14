@@ -189,6 +189,10 @@
 #   Added one more pipe character to each line of the options_packs_usage_statistics output.
 #   The resulting tables will be complete in means of empty cells. 
 #
+# 2018-03-14      roveda      0.33
+#   Added security_settings(), currently for Unified Auditing.
+#
+#
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
@@ -205,7 +209,7 @@ use Misc 0.41;
 use Uls2 1.16;
 use HtmlDocument;
 
-my $VERSION = 0.32;
+my $VERSION = 0.33;
 
 # ===================================================================
 # The "global" variables
@@ -1833,6 +1837,104 @@ sub part_2 {
 } # part_2
 
 
+# -------------------------------------------------------------------
+sub security_settings {
+  # -----
+  # Security Settings
+
+  # all parameters SEC_PROTOCOL_xxx
+  # Check that unified auditing is enabled 12.1+
+  # select parameter, value from v$option where PARAMETER = 'Unified Auditing';
+
+  # audit_trail must be DB
+  # select name, value from v$parameter where name = 'audit_trail';
+
+  # Show enabled policies
+  # select POLICY_NAME, ENABLED_OPT, USER_NAME, SUCCESS, FAILURE
+  # from AUDIT_UNIFIED_ENABLED_POLICIES;
+
+  # Also the audit options for all enabled policies?
+  # That would be (for all POLICY_NAME in AUDIT_UNIFIED_ENABLED_POLICIES):
+  # select POLICY_NAME, AUDIT_OPTION, CONDITION_EVAL_OPT
+  # from   AUDIT_UNIFIED_POLICIES
+  # where policy_name = 'ORA_SECURECONFIG'
+
+  title(sub_name());
+
+  $HtmlReport->add_heading(2, "Security Settings", "_default_");
+  $HtmlReport->add_heading(3, "Unified Auditing", "_default_");
+
+  my @L = ();
+  my $txt = "";
+
+  # -----
+  # Check for UNIFIED AUDITING
+
+  my $sql = "
+    select 'unified_auditing', upper(value) 
+    from v\$option 
+    where lower(parameter) = 'unified auditing';
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $V = trim(get_value($TMPOUT1, $DELIM, "unified_auditing"));
+  print "Unified Auditing=$V\n";
+
+  if ($V !~ /TRUE/i ) { 
+    $HtmlReport->add_paragraph('p', "Unified Auditing is not enabled.");
+    $HtmlReport->add_goto_top("top");
+    return(1);
+  }
+  $HtmlReport->add_paragraph('p', "Unified Auditing is enabled.");
+
+  # -----
+  # Check AUDIT_TRAIL, must be: DB or DB,EXTENDED
+
+  $sql = "
+    select 'audit_trail', upper(value) from v\$parameter where lower(name) = 'audit_trail';
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  $V = trim(get_value($TMPOUT1, $DELIM, "audit_trail"));
+  print "AUDIT_TRAIL=$V\n";
+
+  if ($V !~ /DB/i ) {
+    $HtmlReport->add_paragraph('p', "AUDIT_TRAIL is set to '$V', but not to 'DB' or 'DB,EXTENDED'.");
+    $HtmlReport->add_goto_top("top");
+    return(1);
+  }
+  $HtmlReport->add_paragraph('p', "AUDIT_TRAIL is set to '$V'.");
+
+  # -----
+  # Get enabled Auditing Policies
+
+  $sql = "
+    select
+      USER_NAME  
+    , POLICY_NAME
+    , ENABLED_OPT
+    , SUCCESS    
+    , FAILURE    
+    FROM AUDIT_UNIFIED_ENABLED_POLICIES
+    order by 1,2;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  @L = ();
+  get_value_lines(\@L, $TMPOUT1);
+
+  unshift(@L, "USER_NAME  $DELIM  POLICY_NAME   $DELIM   ENABLED_OPT  $DELIM  SUCCESS  $DELIM  FAILURE");
+
+  $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
+  $HtmlReport->add_goto_top("top");
+
+  return(0);
+
+} # security_settings
+
 
 # -------------------------------------------------------------------
 sub part_4 {
@@ -2886,6 +2988,11 @@ part_1();
 # -----
 # Parameters,  NLS settings
 part_2();
+
+# -----
+# Security Settings
+
+security_settings();
 
 # -----
 # RAC
