@@ -192,6 +192,18 @@
 # 2018-03-14      roveda      0.33
 #   Added security_settings(), currently for Unified Auditing.
 #
+# 2018-03-28      roveda      0.34
+#   Added FORCE_LOGGING for database and for tablespace.
+#
+# 2018-06-06      roveda      0.35
+#   Added incarnation information.
+#
+# 2018-08-01      roveda      0.36
+#   Added BIGFILE info for tablespaces.
+#
+# 2018-10-06      roveda      0.37
+#   Added extended info about unified auditing for Oracle 12.2
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -205,11 +217,11 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.41;
+use Misc 0.42;
 use Uls2 1.16;
 use HtmlDocument;
 
-my $VERSION = 0.33;
+my $VERSION = 0.37;
 
 # ===================================================================
 # The "global" variables
@@ -1509,6 +1521,9 @@ sub part_1 {
 
   title(sub_name());
 
+  my $txt = "";
+  my @L = ();
+
   my $dt = iso_datetime();
 
   $HtmlReport->add_heading(1, "Oracle Database Information Report");
@@ -1529,6 +1544,7 @@ sub part_1 {
     select 'GUARD_STATUS',   GUARD_STATUS from v\$database;
     select 'DB_UNIQUE_NAME', DB_UNIQUE_NAME from v\$database;
     select 'FLASHBACK_ON',   FLASHBACK_ON from v\$database;
+    select 'FORCE_LOGGING',  FORCE_LOGGING from v\$database;
     select 'LOG_MODE',       LOG_MODE from v\$database;
   ";
 
@@ -1580,6 +1596,7 @@ sub part_1 {
   , "Database role        ! " . trim(get_value($TMPOUT1, $DELIM, "DATABASE_ROLE"))
   , "Archive log mode     ! " . trim(get_value($TMPOUT1, $DELIM, "LOG_MODE"))
   , "Flashback            ! " . trim(get_value($TMPOUT1, $DELIM, "FLASHBACK_ON"))
+  , "Force Logging        ! " . trim(get_value($TMPOUT1, $DELIM, "FORCE_LOGGING"))
   , "Dataguard status     ! " . trim(get_value($TMPOUT1, $DELIM, "GUARD_STATUS"))
   , "Running on host      ! $MY_HOST"
   , "Host platform        ! " . trim(get_value($TMPOUT1, $DELIM, "platform"))
@@ -1589,6 +1606,41 @@ sub part_1 {
   ];
 
   $HtmlReport->add_table($aref, "!", "LL", 0);
+
+  # -----
+  # Incarnations
+
+
+  $sql = "
+    select 
+      INCARNATION#
+    , to_char(RESETLOGS_TIME, 'yyyy-mm-dd HH24:MI:SS')  RESETLOGS_TIME
+    , STATUS
+    , RESETLOGS_ID
+    from V\$DATABASE_INCARNATION
+    order by 1;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  @L = ();
+
+  if (get_value_lines(\@L, $TMPOUT1)) {
+
+    # prepend a title line
+    unshift(@L, "incarnation no  $DELIM  resetlogs time  $DELIM  status  $DELIM  resetlogs id");
+
+    $HtmlReport->add_heading(2, "Incarnations", "_default_");
+    $HtmlReport->add_table(\@L, $DELIM, "RLLR", 1);
+
+    $HtmlReport->add_paragraph('p', "incarnation no: Record ID for the branch record in the control file<br>
+resetlogs time: Resetlogs timestamp for the incarnation of the current row<br>
+status: ORPHAN incarnation, CURRENT incarnation of the database, PARENT of the current incarnation<br>
+resetlogs id: Branch ID for the incarnation of the current row (used by user-managed recovery/RMAN restore to get unique names for archived logs across incarnations) ");
+  }
+
+  
+
 
   # -----
   # Environment variables
@@ -1614,8 +1666,8 @@ sub part_1 {
 
   if (! do_sql($sql)) {return(0)}
 
-  my @L = ();
-  my $txt = "";
+  @L = ();
+  $txt = "";
 
   if (get_value_lines(\@L, $TMPOUT1)) {
     $HtmlReport->add_heading(2, "Banner Information", "_default_");
@@ -1862,7 +1914,14 @@ sub security_settings {
   title(sub_name());
 
   $HtmlReport->add_heading(2, "Security Settings", "_default_");
+
   $HtmlReport->add_heading(3, "Unified Auditing", "_default_");
+
+  if ($ORA_MAJOR_RELNO < 12 ) {
+    $HtmlReport->add_paragraph('p', "Unified Auditing is only available starting with Oracle 12.1, not for $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO.");
+    $HtmlReport->add_goto_top("top");
+    return(0);
+  }
 
   my @L = ();
   my $txt = "";
@@ -1910,26 +1969,55 @@ sub security_settings {
   # -----
   # Get enabled Auditing Policies
 
-  $sql = "
-    select
-      USER_NAME  
-    , POLICY_NAME
-    , ENABLED_OPT
-    , SUCCESS    
-    , FAILURE    
-    FROM AUDIT_UNIFIED_ENABLED_POLICIES
-    order by 1,2;
-  ";
+  if (oracle_3d_version() =~ /^012.001/ ) {
+    $sql = "
+      select
+        USER_NAME  
+      , POLICY_NAME
+      , ENABLED_OPT
+      , SUCCESS    
+      , FAILURE    
+      FROM AUDIT_UNIFIED_ENABLED_POLICIES
+      order by 1,2;
+    ";
+  
+    if (! do_sql($sql)) {return(0)}
 
-  if (! do_sql($sql)) {return(0)}
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
 
-  @L = ();
-  get_value_lines(\@L, $TMPOUT1);
+    unshift(@L, "USER_NAME  $DELIM  POLICY_NAME   $DELIM   ENABLED_OPT  $DELIM  SUCCESS  $DELIM  FAILURE");
 
-  unshift(@L, "USER_NAME  $DELIM  POLICY_NAME   $DELIM   ENABLED_OPT  $DELIM  SUCCESS  $DELIM  FAILURE");
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
+    $HtmlReport->add_goto_top("top");
 
-  $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
-  $HtmlReport->add_goto_top("top");
+  } elsif (oracle_3d_version() =~ /^012.002/ ) {
+    $sql = "
+      select
+        USER_NAME
+      , POLICY_NAME
+      , ENABLED_OPT
+      , ENABLED_OPTION
+      , ENTITY_NAME
+      , ENTITY_TYPE
+      , SUCCESS
+      , FAILURE
+      FROM AUDIT_UNIFIED_ENABLED_POLICIES
+      order by 1,2;
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    unshift(@L, "USER_NAME $DELIM POLICY_NAME $DELIM ENABLED_OPT $DELIM ENABLED_OPTION $DELIM ENTITY_NAME $DELIM ENTITY_TYPE $DELIM SUCCESS $DELIM FAILURE");
+
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLLLLL", 1);
+
+  } else {
+  $HtmlReport->add_paragraph('p', "Oracle version $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO is currently not supported by this script.");
+  }
 
   return(0);
 
@@ -2196,7 +2284,8 @@ sub part_8_til10 {
               where dts.tablespace_name = dtf.tablespace_name),
            block_size,
            PCT_INCREASE,
-           DEF_TAB_COMPRESSION
+           DEF_TAB_COMPRESSION,
+           force_logging
       from dba_tablespaces dts order by 1;
   ";
 
@@ -2217,19 +2306,20 @@ sub part_8_til10 {
     $HtmlReport->add_heading(3, $E[0]);
 
     my $aref = [
-      "Contents                 : " . $E[4]
-    , "Block Size               : " . $E[11]
-    , "Status                   : " . $E[3]
-    , "Logging                  : " . $E[5]
-    , "Table Compression        : " . $E[13]
-    , "Extent Management        : " . $E[6]
-    , "Initial Extent           : " . $E[1]
-    , "Percent Increase         : " . $E[12]
-    , "Next Extent              : " . $E[2]
-    , "Allocation Type          : " . $E[7]
-    , "Segment Space Management : " . $E[8]
-    , "Datafiles                : " . $E[10]
-    , "Autoextensible datafiles : " . $E[9]
+      "Contents                  : " . $E[4]
+    , "Block Size                : " . $E[11]
+    , "Status                    : " . $E[3]
+    , "Logging                   : " . $E[5]
+    , "Force Logging             : " . $E[14]
+    , "Default Table Compression : " . $E[13]
+    , "Extent Management         : " . $E[6]
+    , "Initial Extent            : " . $E[1]
+    , "Percent Increase          : " . $E[12]
+    , "Next Extent               : " . $E[2]
+    , "Allocation Type           : " . $E[7]
+    , "Segment Space Management  : " . $E[8]
+    , "Datafiles                 : " . $E[10]
+    , "Autoextensible datafiles  : " . $E[9]
     ];
     $HtmlReport->add_table($aref, ":", "LL", 0);
 
@@ -2269,7 +2359,7 @@ sub part_8_11plus {
            block_size, 
            PCT_INCREASE,
            encrypted,
-           DEF_TAB_COMPRESSION, COMPRESS_FOR
+           DEF_TAB_COMPRESSION, COMPRESS_FOR, BIGFILE
       from dba_tablespaces dts order by 1;
   ";
 
@@ -2294,6 +2384,7 @@ sub part_8_11plus {
     my $aref = [
         "Contents                 : " . $E[4]
       , "Block Size               : " . $E[11]
+      , "Bigfile                  : " . $E[16]
       , "Status                   : " . $E[3]
       , "Encrypted                : " . $E[13]
       , "Logging                  : " . $E[5]
@@ -2984,6 +3075,18 @@ if (! oracle_available() ) {
 # opatch lsinventory, environment variables
 
 part_1();
+
+# Check if Oracle version is supported by this script.
+if ( oracle_3d_version() < "010" ) {
+  output_error_message("$CURRPROG: Error: Oracle version $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO is too old, 10.1 at least => aborting script.");
+  end_script(1);
+}
+if ( oracle_3d_version() > "012.002.000.001" ) {
+  output_error_message("$CURRPROG: Error: Oracle version $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO is too new, 12.2.0.1 is maximum => aborting script.");
+  end_script(1);
+}
+
+
 
 # -----
 # Parameters,  NLS settings

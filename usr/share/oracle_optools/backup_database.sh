@@ -3,7 +3,7 @@
 # backup_database.sh - backup the database regularly
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016 - 2019, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -66,6 +66,9 @@
 #   Changed check for successful sourcing the environment to [ -z "$ORACLE_SID" ]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2019-01-02      roveda      0.04
+#   Added and corrected some comments.
+#
 # ---------------------------------------------------------
 
 
@@ -99,14 +102,16 @@ export LANG=C
 # Check if database backup is turned off
 
 # To turn off the database backup, you must enter the appropriate date
-# (yyyy-mm-dd) in file  /var/tmp/oracle_${ORACLE_SID}.norman.
+# (yyyy-mm-dd) in file  /var/tmp/oracle_optools/${ORACLE_SID}/no_backup
 # 
 
 if [ "`uname`" != "HP-UX" ] ; then
   # Check if current date (minus 12 hours) is listed in 
   # file /var/tmp/oracle_optools/${ORACLE_SID}/no_backup
 
-  # Date, 12 hours ago, (e.g.: 2016-06-16)
+  # Date, 12 hours ago, (e.g.: 2018-12-15)
+  # When the backup starts at 02:00 the LOGICAL_START_DATE
+  # will point to the day before.
   LOGICAL_START_DATE=$(date -d "-12 hours" +"%F")
 
   if [ -r /var/tmp/oracle_optools/${ORACLE_SID}/no_backup ] ; then

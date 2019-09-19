@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# nightly.sh - execute scripts each night
+# nightly_performance_reports.sh - execute performance report scripts each night
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2018, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -23,7 +23,7 @@
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   nightly.sh  <oracle_env_script>
+#   nightly_performance_reports.sh  <oracle_env_script>
 #
 # ---------------------------------------------------------
 # Description:
@@ -52,12 +52,8 @@
 # 
 # date            name        version
 # ----------      ----------  -------
-# 2017-02-01      roveda      0.01
-#   Fixed the missing usage of the environment script given as parameter.
-#
-# 2018-02-14      roveda      0.02
-#   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
-#   instead of [ $? -ne 0 ] (what does not work).
+# 2018-04-18      roveda      0.01
+#   Extracted from nightly.sh
 #
 #
 # ---------------------------------------------------------
@@ -88,51 +84,18 @@ unset LC_ALL
 export LANG=C
 
 # -----
-# Generate a database configuration report
+# Generate a daily report of the database statspack performance snapshots
+# (only if configured)
 
-# ./ora_dbinfo.sh
-./run_perl_script.sh $ORAENV ora_dbinfo.pl  /etc/oracle_optools/standard.conf
+# ./ora_statspack.sh REPORT DAILY_REPORT
+./run_perl_script.sh $ORAENV ora_statspack.pl  /etc/oracle_optools/standard.conf  REPORT  DAILY_REPORT
 
 
 # -----
-# Housekeeping
+# AWR and ADDM report
 #
-# That purges old audit entries,
-# deletes old tracefiles and rotates the logfiles on sundays.
+# NOTE: Use this ONLY(!) if you have the necessary Oracle product option licensed!!!
 
-# [ -x ./ora_housekeeping.sh ] && ./ora_housekeeping.sh
-./run_perl_script.sh $ORAENV ora_housekeeping.pl  /etc/oracle_optools/standard.conf
-
-
-# -----
-# Remove old audit files
-#   Set the path according to Oracle's parameter 'audit_file_dest'.
-#
-#   This must always be set, because SYSDBA connections are always logged there.
-#   (If ora_housekeeping does not work or the configuration does not match)
-
-find /oracle/admin/$ORACLE_SID/?dump -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-
-
-# -----
-# Remove old archived redo logs
-#   Only together with old style database backup!
-#   RMAN will take care of the archived redo logs itself.
-#   Set the path to 'log_archive_dest_?', perhaps you need
-#   multiple entries. Adjust the '+10' (days) to your needs.
-#   '-follow' is needed for linked directories.
-#
-# find /oracle/backup/$ORACLE_SID/archived_redo_logs/ -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-# find /oracle/archived_redo_logs/$ORACLE_SID/ -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-
-# -----
-# Remove old connection protocol files made by ipprotd.
-#
-find /oracle/admin/$ORACLE_SID/connection_protocol -name "prot_*" -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-
-
-# -----
-# Remove *.tmp files from current directory
-
-find . -follow -type f -name "*.tmp" -mtime +10 -exec rm {} \; > /dev/null 2>&1
+# ./ora_awr_addm.sh 
+./run_perl_script.sh $ORAENV ora_awr_addm.pl  /etc/oracle_optools/standard.conf
 

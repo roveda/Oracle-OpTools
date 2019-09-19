@@ -5,6 +5,14 @@ There is only a short information about the changes, but
 it will point to the changed scripts.
 
 # -----
+2018-10-05, roveda
+  Added version check in ora_dbinfo and distinguish the output
+  for the different versions in unified auditing.
+
+2018-08-01, roveda
+  ora_dbinfo.pl: Added BIGFILE info for tablespaces
+  Added scripts to start and stop ipprotd as an SCCL package.
+
 2018-03-11, roveda
   Missing END IF corrected in ora_housekeeping.pl.
 

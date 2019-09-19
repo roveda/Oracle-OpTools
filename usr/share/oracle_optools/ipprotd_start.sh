@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# nightly.sh - execute scripts each night
+# ipprotd_start.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2018, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -23,11 +23,19 @@
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   nightly.sh  <oracle_env_script>
+#   ipprotd_start.sh  <oracle_environment_script>  <ip_address>
 #
 # ---------------------------------------------------------
 # Description:
-#   Do some nightly jobs.
+#   Script to start an ipprotd daemon
+#
+#   <oracle_environment_script>:
+#       the full path of the script to set the
+#       environment variables for Oracle, like ORACLE_HOME and ORACLE_SID
+#
+#   <ip_address>:
+#      The ip address to listen on and to write the tcp packets to.
+#      That must be identical to the ip address of the listener.
 #
 #   Send any hints, wishes or bug reports to:
 #     roveda at universal-logging-system.org
@@ -49,22 +57,49 @@
 #
 # ---------------------------------------------------------
 # Versions:
-# 
+#
 # date            name        version
 # ----------      ----------  -------
-# 2017-02-01      roveda      0.01
-#   Fixed the missing usage of the environment script given as parameter.
-#
-# 2018-02-14      roveda      0.02
-#   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
-#   instead of [ $? -ne 0 ] (what does not work).
-#
+# 2018-08-26      roveda      0.01
 #
 # ---------------------------------------------------------
 
+USAGE="ipprotd_start.sh  <oracle_environment_script>  <ip_address>"
 
+# -------------------------------------------------------------------
+title () {
+  # Echo a title to stdout.
+  local DT=`date +"%Y-%m-%d %H:%M:%S"`
+
+  local A="--[ $*"
+  A=`echo $A | awk '{printf("%.53s", $0)}'`
+  A="$A ]---------------------------------------------------------------"
+  A=`echo $A | awk '{printf("%.56s", $0)}'`
+  A="$A[ $DT ]-"
+
+  echo
+  echo $A
+  echo
+}
+# -------------------------------------------------------------------
+# -------------------------------------------------------------------
+
+title "$0 started"
+
+# YYYY-MM-DD when the script has been started.
+STARTED=$(date +"%Y-%m-%d")
+
+# -----
 # Go to directory where this script is placed
-cd `dirname $0`
+cd $(dirname $0)
+
+# -----
+# Check number of arguments
+
+if [[ $# -ne 2 ]] ; then
+  echo "$USAGE"
+  exit 1
+fi
 
 # -----
 # Set environment
@@ -73,7 +108,7 @@ ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
   echo "Error: environment script '$ORAENV' not found => abort"
-  exit 1
+  exit 2
 fi
 
 . $ORAENV
@@ -81,58 +116,25 @@ if [[ -z "$ORACLE_SID" ]] ; then
   echo
   echo "Error: the Oracle environment is not set up correctly => aborting script"
   echo
-  exit 1
+  exit 2
 fi
 
+# -----
+LISTENER_IP="$2"
+
+
+# -----
 unset LC_ALL
 export LANG=C
 
-# -----
-# Generate a database configuration report
-
-# ./ora_dbinfo.sh
-./run_perl_script.sh $ORAENV ora_dbinfo.pl  /etc/oracle_optools/standard.conf
-
 
 # -----
-# Housekeeping
-#
-# That purges old audit entries,
-# deletes old tracefiles and rotates the logfiles on sundays.
+# Start the ipprot daemon
 
-# [ -x ./ora_housekeeping.sh ] && ./ora_housekeeping.sh
-./run_perl_script.sh $ORAENV ora_housekeeping.pl  /etc/oracle_optools/standard.conf
+ipprotd -p 6544@$LISTENER_IP -P 6543@$LISTENER_IP -L -s -t 180 -f /oracle/admin/$ORACLE_SID/connection_protocol/prot -j -u /oracle/admin/$ORACLE_SID/oracle_tools/send_ipprot -Dp /oracle/admin/$ORACLE_SID/connection_protocol/pid_6544_$LISTENER_IP
+RET=$?
 
 
-# -----
-# Remove old audit files
-#   Set the path according to Oracle's parameter 'audit_file_dest'.
-#
-#   This must always be set, because SYSDBA connections are always logged there.
-#   (If ora_housekeeping does not work or the configuration does not match)
-
-find /oracle/admin/$ORACLE_SID/?dump -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-
-
-# -----
-# Remove old archived redo logs
-#   Only together with old style database backup!
-#   RMAN will take care of the archived redo logs itself.
-#   Set the path to 'log_archive_dest_?', perhaps you need
-#   multiple entries. Adjust the '+10' (days) to your needs.
-#   '-follow' is needed for linked directories.
-#
-# find /oracle/backup/$ORACLE_SID/archived_redo_logs/ -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-# find /oracle/archived_redo_logs/$ORACLE_SID/ -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-
-# -----
-# Remove old connection protocol files made by ipprotd.
-#
-find /oracle/admin/$ORACLE_SID/connection_protocol -name "prot_*" -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
-
-
-# -----
-# Remove *.tmp files from current directory
-
-find . -follow -type f -name "*.tmp" -mtime +10 -exec rm {} \; > /dev/null 2>&1
+title "Finished"
+exit $RET
 

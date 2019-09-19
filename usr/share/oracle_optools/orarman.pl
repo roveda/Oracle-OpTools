@@ -1330,7 +1330,7 @@ RMAN log file:
 #   proper execution of this script.
 # 
 
-Copyright 2008-2017, roveda
+Copyright 2008-2018, roveda
 
 Oracle OpTools is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

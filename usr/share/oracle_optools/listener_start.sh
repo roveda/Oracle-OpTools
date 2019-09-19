@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# instance_start.sh
+# listener_start.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2019, roveda
+# Copyright 2019, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -23,13 +23,13 @@
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   instance_start.sh  <oracle_environment_script>  {<listener_name> | DEFAULT | NONE}
+#   listener_start.sh  <oracle_environment_script>  {<listener_name> | DEFAULT | NONE}
 #
 # ---------------------------------------------------------
 # Description:
-#   Script to start an Oracle database instance.
+#   Script to start a listener.
 #
-#   <oracle_environment_script>:
+#   <oracle_environment_script>: 
 #       the full path of the script to set the
 #       environment variables for Oracle, like ORACLE_HOME and ORACLE_SID
 #
@@ -64,30 +64,40 @@
 #
 # date            name        version
 # ----------      ----------  -------
-# 2017-02-01      roveda      0.01
-#   Fixed the missing usage of the environment script given as parameter.
+# 2019-05-14      roveda      0.01
+#   Extracted from instance_start.sh
 #
-# 2018-02-14      roveda      0.02
-#   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
-#   instead of [ $? -ne 0 ] (what does not work).
-#
-# 2019-07-03      roveda      0.03
-#   Now supporting Data Guard Standby databases. Starting up only in MOUNTED.
 #
 # ---------------------------------------------------------
 
-USAGE="instance_start.sh  <oracle_environment_script>  { <listener_name> | DEFAULT | NONE }"
-
-# -----
-# Go to directory where this script is placed
-cd $(dirname $0)
-. ./ooFunctions
+USAGE="listener_start.sh  <oracle_environment_script>  { <listener_name> | DEFAULT | NONE }"
 
 # -------------------------------------------------------------------
+title () {
+  # Echo a title to stdout.
+  local DT=`date +"%Y-%m-%d %H:%M:%S"`
+
+  local A="--[ $*"
+  A=`echo $A | awk '{printf("%.53s", $0)}'`
+  A="$A ]---------------------------------------------------------------"
+  A=`echo $A | awk '{printf("%.56s", $0)}'`
+  A="$A[ $DT ]-"
+
+  echo
+  echo $A
+  echo
+}
+# -------------------------------------------------------------------
+# -------------------------------------------------------------------
+
 title "$0 started"
 
 # YYYY-MM-DD when the script has been started.
 STARTED=$(date +"%Y-%m-%d")
+
+# -----
+# Go to directory where this script is placed
+cd $(dirname $0)
 
 # -----
 # Check number of arguments
@@ -137,16 +147,19 @@ UC_LISTENER_NAME=$(echo $LISTENER_NAME | tr [[:lower:]] [[:upper:]])
 case $UC_LISTENER_NAME in
   NONE)
     echo "No listener is started!"
+    title "Finished"
+    exit 0
     ;;
   DEFAULT)
-    # If 'DEFAULT' has been given as listener name,
+    # If 'DEFAULT' has been given as listener name, 
     # start the listener with default listener name
 
     echo "Starting the default listener"
     echo
     lsnrctl start
     if [ $? -ne 0 ] ; then
-      echo "WARNING: Cannot start the default listener!"
+      echo "ERROR: Cannot start the default listener!"
+      exit 1
     else
       echo "INFO: Successfully started the default listener."
     fi
@@ -157,7 +170,8 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl start $LISTENER_NAME
     if [ $? -ne 0 ] ; then
-      echo "WARNING: Cannot start the non-default listener '$LISTENER_NAME'!"
+      echo "ERROR: Cannot start the non-default listener '$LISTENER_NAME'!"
+      exit 1
     else
       echo "INFO: Successfully started the non-default listener '$LISTENER_NAME'."
     fi
@@ -165,73 +179,16 @@ case $UC_LISTENER_NAME in
 esac
 
 # -----
-# Database
+# Test by tnsping
+# When running thru this section, a listener must run.
 
-title "Starting Oracle Database Server"
+# Assume, you have defined ORACLE_SID as a net service name.
 
-echo "ORACLE_HOME=$ORACLE_HOME"
-echo "ORACLE_SID=$ORACLE_SID"
-echo
-echo "+------------------------------------------------------------+"
-echo "|                                                            |"
-echo "| Performing a STARTUP MOUNT, this may take a while...       |"
-echo "|                                                            |"
-echo "+------------------------------------------------------------+"
-echo
-
-# -----
-# STARTUP MOUNT
-
-sql_exec "STARTUP MOUNT"
-
-# -----
-# Check for MOUNTED
-
-OPENMODE=$(sql_value "SELECT STATUS FROM V\$INSTANCE;")
-if [[ "$OPENMODE" != "MOUNTED" ]] ; then
-  echo
-  echo "================================================================"
-  echo "ERROR: Database is not 'MOUNTED'! Shutting down..."
-  sql_exec "SHUTDOWN IMMEDIATE"
-  echo "================================================================"
-  title "Aborted"
-  exit 1
-fi
-# Database is MOUNTED
-
-
-# -----
-# Check for DataGuard Standby
-DBROLE=$(sql_value "SELECT DATABASE_ROLE FROM V\$DATABASE;")
-
-if [[ "$DBROLE" == "PRIMARY" ]] ; then
-  echo
-  echo "+-------------------------------------------------------------+"
-  echo "|                                                             |"
-  echo "| Performing an ALTER DATABASE OPEN, this may take a while... |"
-  echo "|                                                             |"
-  echo "+-------------------------------------------------------------+"
-  echo
-  sql_exec "ALTER DATABASE OPEN;"
-
-  # Check for READ WRITE
-
-  OPENMODE=$(sql_value "SELECT STATUS FROM V\$INSTANCE;")
-  if [[ "$OPENMODE" != "OPEN" ]] ; then
-    echo
-    echo "================================================================"
-    echo "ERROR: Database is not 'OPEN'! Shutting down..."
-    sql_exec "SHUTDOWN IMMEDIATE"
-    echo "================================================================"
-    title "Aborted"
-    exit 1
-  fi
+if tnsping $ORACLE_SID ; then
 fi
 
 echo
-echo "SUCCESS: Database '$ORACLE_SID' is '$OPENMODE', database role '$DBROLE'."
-echo
-title "Oracle Database Server started"
+echo "SUCCESS: Database is 'OPEN'."
 
 title "Finished"
 exit 0

@@ -3,7 +3,7 @@
 # backup_redologs.sh - backup the redo logs regularly
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016 - 2019, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -59,6 +59,10 @@
 #   Changed check for successful sourcing the environment to [ -z "$ORACLE_SID" ]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2019-01-02      roveda      0.03
+#   Added support for skipping the redo log backup based on time intervals 
+#   defined in /var/tmp/oracle_optools/${ORACLE_SID}/no_backup_redologs.
+#
 # ---------------------------------------------------------
 
 
@@ -85,6 +89,40 @@ fi
 
 unset LC_ALL
 export LANG=C
+
+
+# -----
+# Check if redo log backup is turned off
+
+# To turn off the redo log backup, you must enter the appropriate date interval in file:
+#   /var/tmp/oracle_optools/${ORACLE_SID}/no_backup_redologs
+#
+# You find a template file here:
+#   /var/tmp/oracle_optools/no_backup_redologs.template
+#
+# Format of interval to skip the redo log backup (interval_begin interval_end):
+#   yyyy-mm-dd_HH:MI:SS yyyy-mm-dd_HH:MI:SS
+#
+SKIPFILE=/var/tmp/oracle_optools/${ORACLE_SID}/no_backup_redologs
+
+if [ -r $SKIPFILE ] ; then
+  NOW=$(date +"%Y-%m-%d_%H:%M:%S")
+
+  F=$(mktemp).tmp
+  # skip empty lines, skip lines beginning with '#'
+  sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*#/d' $SKIPFILE > $F
+
+  while read timeint_begin timeint_end ; do
+    if [[ "$NOW" > "$timeint_begin" ]] ; then
+      if [[ "$NOW" < "$timeint_end" ]] ; then
+        # echo "Do NOT execute the redo log backup"
+        exit 0
+      fi
+    fi
+  done < $F
+  rm $F
+  # echo "Execute the redo log backup"
+fi
 
 # -----
 # Backup the redo log and archived redo logs

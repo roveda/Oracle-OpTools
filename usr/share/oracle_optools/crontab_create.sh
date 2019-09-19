@@ -103,6 +103,9 @@
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2018-04-18      roveda      0.16
+#   Added entry for nightly_performance_reports.sh (extracted from nightly.sh).
+#
 # -----------------------------------------------------------------------------
 
 USAGE="crontab_create.sh  <oracle_environment_script>  <destination_dir>  [ SILENT ]"
@@ -220,7 +223,11 @@ cat << EOF > $CRONFILE
 01 * * * * oracle /usr/share/oracle_optools/hourly.sh $ORAENV > /var/tmp/oracle_optools/${ORACLE_SID}/hourly.log 2>&1
 #
 # -----
-# Nightly jobs at 03:01 (removal of trace files, statspack and/or AWR reports, DB info report, housekeeping)
+# Evening jobs at 22:00 to build nightly performance reports (AWR, STATSPACK)
+01 22 * * * oracle /usr/share/oracle_optools/nightly_performance_reports.sh $ORAENV > /var/tmp/oracle_optools/${ORACLE_SID}/nightly_performance_reports.log 2>&1
+#
+# -----
+# Nightly jobs at 03:01 (removal of trace files, DB info report, housekeeping)
 01 03 * * * oracle /usr/share/oracle_optools/nightly.sh $ORAENV > /var/tmp/oracle_optools/${ORACLE_SID}/nightly.log 2>&1
 #
 # -----

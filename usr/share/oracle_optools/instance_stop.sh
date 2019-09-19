@@ -3,7 +3,7 @@
 # instance_stop.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016 - 2019, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -41,7 +41,7 @@
 #   NONE:
 #      Do not stop any listener.
 #
-#   ABORT: 
+#   ABORT:
 #      Shutdown the database with 'shutdown abort' instead of the default 'shutdown immediate'.
 #
 #   Send any hints, wishes or bug reports to:
@@ -74,44 +74,30 @@
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2019-07-03      roveda      0.03
+#   Debugged the test of the parameter count. And ABORT is now recognized.
 #
 # ---------------------------------------------------------
 #
 
 USAGE="instance_stop.sh  <oracle_environment_script>  { <listener_name> | DEFAULT | NONE }  [ABORT]"
 
+# -----
+# Go to directory where this script is placed
+cd $(dirname $0)
+. ./ooFunctions
 
-# -------------------------------------------------------------------
-title () {
-  # Echo a title to stdout.
-  local DT=`date +"%Y-%m-%d %H:%M:%S"`
-
-  local A="--[ $*"
-  A=`echo $A | awk '{printf("%.53s", $0)}'`
-  A="$A ]---------------------------------------------------------------"
-  A=`echo $A | awk '{printf("%.56s", $0)}'`
-  A="$A[ $DT ]-"
-
-  echo
-  echo $A
-  echo
-}
-# -------------------------------------------------------------------
-# -------------------------------------------------------------------
-
+# -----
 title "$0 started"
 
 # YYYY-MM-DD when the script has been started.
-STARTED=`date +"%Y-%m-%d"`
-
-# -----
-# Go to directory where this script is placed
-cd `dirname $0`
+STARTED=$(date +"%Y-%m-%d")
 
 # -----
 # Check number of arguments
 
-if [[ $# -lt 3 ]] ; then
+if [[ $# -lt 2 ]] ; then
+  echo "Error: You must at least specify 2 parameters => ABORTING SCRIPT"
   echo "$USAGE"
   exit 1
 fi
@@ -122,14 +108,14 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echo "Error: environment script '$ORAENV' not found => ABORTING SCRIPT"
   exit 2
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
   echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
+  echo "Error: the Oracle environment is not set up correctly => ABORTING SCRIPT"
   echo
   exit 2
 fi
@@ -190,25 +176,16 @@ esac
 # -----
 # Shut down the database
 
-title "Stopping Oracle Database Server"
+# ABORT the database instance?
+ABORT=${3:-NO}
 
-ORA_SETTINGS="
-set echo off
-set pagesize 9999
-set linesize 300
-set sqlprompt 'SQL> '
-set timing on
-set serveroutput on
-set echo on
-"
+title "Stopping Oracle Database Server"
 
 # -----
 ABORT_COMMAND="
-$ORA_SETTINGS
-
 SHUTDOWN ABORT;
 STARTUP RESTRICT;
-SHUTDOWN IMMEDIATE; 
+SHUTDOWN IMMEDIATE;
 exit;
 "
 
@@ -228,8 +205,6 @@ ABORT_MSG="
 
 # -----
 SHUTDOWN_COMMAND="
-$ORA_SETTINGS
-
 SHUTDOWN IMMEDIATE;
 exit;
 "
@@ -246,26 +221,18 @@ SHUTDOWN_MSG="
 +------------------------------------------------------------+
 "
 
-F=$(mktemp).sql
-
 if [ "$ABORT" = "ABORT" ] ; then
   # -----
   # Long running transactions may deny the clean 'shutdown immediate',
   # so use 'shutdown abort' followed by a clean 'shutdown immediate'.
   # Currently, I do not know of any other solution.
   echo "$ABORT_MSG"
-  echo "$ABORT_COMMAND" > $F
+  exec_sql "$ABORT_COMMAND"
 else
   # shutdown immediate
   echo "$SHUTDOWN_MSG"
-  echo "$SHUTDOWN_COMMAND" > $F
+  sql_exec "$SHUTDOWN_COMMAND"
 fi
-
-# cat $F
-echo
-
-sqlplus / as sysdba @$F
-rm $F
 
 # -----
 # Always assume, the database was stopped successfully.

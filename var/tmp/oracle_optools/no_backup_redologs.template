@@ -1,0 +1,18 @@
+# no_backup_redologs.template
+#
+#
+# Diese Datei muss unter dem Namen 'no_backup_redologs' im Unterverzeichnis zur ORACLE_SID 
+# erstellt werden, falls Redo Log Sicherungen mit dem Skript 'backup_redologs.sh'
+# fuer bestimmte Zeitintervalle ausgesetzt werden sollen.
+#
+# Soll keine Redo Log Sicherung ausgefuehrt werden, so ist der entsprechende Zeitbereich 
+# in eine Zeile in dieser Datei einzutragen. Das Format ist:
+# yyyy-mm-dd_HH:MI:SS yyyy-mm-dd_HH:MI:SS
+# also z.B.: 
+# 2018-12-30_13:24:00 2018-12-30_14:59:59
+#
+# You should place the entries in descending chronological order for best performance.
+#
+# Das Aussetzen der Redo Log Sicherung bezieht sich exakt auf den angegebenen Zeitbereich.
+# Schon begonnene Redo Log Sicherungen werden dadurch nicht beeinflusst.
+

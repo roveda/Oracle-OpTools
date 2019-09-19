@@ -1,0 +1,224 @@
+#
+# ooFunctions - A composition of useful bash functions
+#
+# ---------------------------------------------------------
+# Copyright 2019, roveda
+#
+# This file is part of the 'Oracle OpTools'.
+#
+# The 'Oracle OpTools' is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# The 'Oracle OpTools' is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with the 'Oracle OpTools'. If not, see <http://www.gnu.org/licenses/>.
+#
+#
+# ---------------------------------------------------------
+# Synopsis:
+#   instance_start.sh  <oracle_environment_script>  {<listener_name> | DEFAULT | NONE}
+#
+# ---------------------------------------------------------
+# Description:
+#   Script to start an Oracle database instance.
+#
+#   <oracle_environment_script>:
+#       the full path of the script to set the
+#       environment variables for Oracle, like ORACLE_HOME and ORACLE_SID
+#
+#   <listener_name>:
+#      The name of the listener to be startied.
+#   DEFAULT:
+#      Start the default listener.
+#
+#   NONE:
+#      Do not start any listener.
+#
+#   Send any hints, wishes or bug reports to:
+#     roveda at universal-logging-system.org
+#
+# ---------------------------------------------------------
+# Options:
+#
+# ---------------------------------------------------------
+# Restrictions:
+#
+# ---------------------------------------------------------
+# Dependencies:
+#
+# ---------------------------------------------------------
+# Disclaimer:
+#   The script has been tested and appears to work as intended,
+#   but there is no guarantee that it behaves as YOU expect.
+#   You should always run new scripts on a test instance initially.
+#
+# ---------------------------------------------------------
+# Versions:
+#
+# date            name        version
+# ----------      ----------  -------
+# 2019-07-03      roveda      0.01
+#   created
+#
+# -------------------------------------------------------------------
+
+OOFUNCTIONS_WARNINGS=""
+# siehe: echowarn() und show_warnings()
+
+
+# -------------------------------------------------------------------
+# title
+#
+# Output a title and timestamp to stdout
+
+title () {
+  # Echo a title to stdout.
+  local DT=`date +"%Y-%m-%d %H:%M:%S"`
+
+  local A="--[ $*"
+  A=`echo $A | awk '{printf("%.53s", $0)}'`
+  A="$A ]---------------------------------------------------------------"
+  A=`echo $A | awk '{printf("%.56s", $0)}'`
+  A="$A[ $DT ]-"
+
+  echo
+  echo $A
+  echo
+} # title
+
+# -------------------------------------------------------------------
+# Output all parameters to stderr
+echoerr() { printf "%s\n" "$*" >&2; }
+
+
+# -------------------------------------------------------------------
+# Output error message and exit
+
+exiterr () {
+  # exiterr <exitvalue> <exit_message> <exit_message> ...
+  local EXVAL=$1
+  shift
+  for m in "$@" ; do
+    echoerr "$m"
+  done
+
+  title "$ME aborted"
+  exit $EXVAL
+}
+
+
+# -------------------------------------------------------------------
+# Output a warning, 
+# append warning to OOFUNCTIONS_WARNINGS.
+
+echowarn () {
+  # echowarn <warn_message> <warn_message> ...
+  echo
+  for m in "$@" ; do
+    echo "$m"
+    [[ ! -z "$OOFUNCTIONS_WARNINGS" ]] && OOFUNCTIONS_WARNINGS="$OOFUNCTIONS_WARNINGS
+"
+    OOFUNCTIONS_WARNINGS="${OOFUNCTIONS_WARNINGS}${m}"
+  done
+  echo
+
+} # echowarn
+
+
+# -------------------------------------------------------------------
+# Output all warnings
+
+show_warnings () {
+  # show_warnings
+
+  if [[ ! -z "${OOFUNCTIONS_WARNINGS}" ]] ; then
+    echo
+    echo "Warnings:"
+    echo "${OOFUNCTIONS_WARNINGS}"
+    echo
+  fi
+} # show_warnings
+
+
+
+# -------------------------------------------------------------------
+# Random password for database users
+# 30stellig
+
+oracle_password () {
+
+  # local A="Az2-$(dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9-_\;\:\=\.\+\?' | cut -c1-26)"
+  # Obiges ist problematisch bei der Verwendung in bash, deshalb Verringerung der Sonderzeichen
+  local D=$(dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc '0-9' | cut -c9)
+  local A="Az${D}-$(dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9_^' | cut -c1-26)"
+  [ -z "$A" ] && A="Az${D}-$(date +%s | sha256sum | base64 | tr -d '\n' | cut -c1-26)"
+  echo $A
+
+} # oracle_password
+
+# -------------------------------------------------------------------
+# exec_sql
+#
+# Execute an sql command
+
+sql_exec () {
+
+  local SQLCMD="set echo off
+
+  set pagesize 9999
+  set linesize 300
+
+  set sqlprompt 'SQL> '
+
+  -- set timing on
+  set serveroutput on
+  set echo on
+  -- -------------------------------------------
+  "
+
+  for var in "$@" ; do
+    SQLCMD="$SQLCMD
+    $var"
+  done
+
+  SQLCMD="$SQLCMD
+  -- -------------------------------------------
+  exit;
+  "
+
+  # temporary file name
+  local F=$(mktemp).sql
+  echo "$SQLCMD" > $F
+
+  sqlplus / as sysdba @$F
+
+  rm $F
+
+} # sql_exec
+
+# -------------------------------------------------------------------
+
+
+sql_value () {
+  # V=$(sql_value "select 1 from dual;")
+  #
+  # execute an sql command and return the found value or ""
+  # NO extra echo commands!
+
+  echo $(sqlplus -s -l / as sysdba <<EOF
+  set echo off heading off feedback off
+  $1
+EOF
+)
+
+} # sql_value
+
+
+# -------------------------------------------------------------------
+

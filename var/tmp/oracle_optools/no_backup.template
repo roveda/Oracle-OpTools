@@ -1,0 +1,17 @@
+# no_backup.template
+#
+#
+# Diese Datei muss unter dem Namen 'no_backup' im Unterverzeichnis zur ORACLE_SID 
+# erstellt werden, falls Datenbankvollsicherungen mit dem Skript 'backup_database.sh'
+# fuer bestimmte Datumsangaben ausgesetzt werden sollen.
+#
+# Soll keine Datenbankvollsicherung ausgefuehrt werden, so ist das entsprechende Datum 
+# in eine Zeile in dieser Datei einzutragen. Das Format ist:
+# yyyy-mm-dd
+# also z.B.: 2018-12-30
+#
+# Dies gilt fuer alle Datenbankvollsicherungen am Abend dieses Datums oder in der 
+# darauffolgenden Nacht.
+
+
+
