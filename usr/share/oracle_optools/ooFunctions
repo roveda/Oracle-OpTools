@@ -2,7 +2,7 @@
 # ooFunctions - A composition of useful bash functions
 #
 # ---------------------------------------------------------
-# Copyright 2019, roveda
+# Copyright 2019-2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -22,26 +22,13 @@
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   instance_start.sh  <oracle_environment_script>  {<listener_name> | DEFAULT | NONE}
+#   . ooFunctions
 #
 # ---------------------------------------------------------
 # Description:
-#   Script to start an Oracle database instance.
 #
-#   <oracle_environment_script>:
-#       the full path of the script to set the
-#       environment variables for Oracle, like ORACLE_HOME and ORACLE_SID
-#
-#   <listener_name>:
-#      The name of the listener to be startied.
-#   DEFAULT:
-#      Start the default listener.
-#
-#   NONE:
-#      Do not start any listener.
-#
-#   Send any hints, wishes or bug reports to:
-#     roveda at universal-logging-system.org
+#   A compilation of useful functions for bash scripts.
+#   (and Oracle databases).
 #
 # ---------------------------------------------------------
 # Options:
@@ -66,6 +53,14 @@
 # 2019-07-03      roveda      0.01
 #   created
 #
+# 2019-10-15      roveda      0.02
+#   title() changed, printf is now used.
+#
+# 2021-01-08      roveda      0.03
+#   Changed oracle_password() to latest version, 
+#   added error trapping in sql_value().
+#   Revised this header.
+#
 # -------------------------------------------------------------------
 
 OOFUNCTIONS_WARNINGS=""
@@ -80,17 +75,22 @@ OOFUNCTIONS_WARNINGS=""
 title () {
   # Echo a title to stdout.
   local DT=`date +"%Y-%m-%d %H:%M:%S"`
+  local A=""
 
-  local A="--[ $*"
-  A=`echo $A | awk '{printf("%.53s", $0)}'`
-  A="$A ]---------------------------------------------------------------"
-  A=`echo $A | awk '{printf("%.56s", $0)}'`
+  if [[ -z "$*" ]] ; then
+    A=$MLINE
+  else
+    A="--[ $*"
+    A=$(printf "%.53s" "${A}")
+    A="$A ]$MLINE"
+  fi
+  A=$(printf "%.56s" "$A")
   A="$A[ $DT ]-"
 
   echo
   echo $A
   echo
-} # title
+}
 
 # -------------------------------------------------------------------
 # Output all parameters to stderr
@@ -153,14 +153,18 @@ show_warnings () {
 
 oracle_password () {
 
-  # local A="Az2-$(dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9-_\;\:\=\.\+\?' | cut -c1-26)"
-  # Obiges ist problematisch bei der Verwendung in bash, deshalb Verringerung der Sonderzeichen
-  local D=$(dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc '0-9' | cut -c9)
-  local A="Az${D}-$(dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9_^' | cut -c1-26)"
+  local p=$(( 1 + $RANDOM % 9 ))
+  local a=$(dd if=/dev/urandom bs=1024 count=1 2>/dev/null | tr -dc 'A-Z' | cut -c$p)
+  local b=$(dd if=/dev/urandom bs=1024 count=1 2>/dev/null | tr -dc 'a-z' | cut -c$p)
+  local c=$(dd if=/dev/urandom bs=1024 count=1 2>/dev/null | tr -dc '0-9' | cut -c$p)
+  local A="$a$b$c-$(dd if=/dev/urandom bs=1024 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9_^' | cut -c1-26)"
+
+  # If any of the above fail, use this as simple alternative
   [ -z "$A" ] && A="Az${D}-$(date +%s | sha256sum | base64 | tr -d '\n' | cut -c1-26)"
   echo $A
 
 } # oracle_password
+
 
 # -------------------------------------------------------------------
 # exec_sql
@@ -209,13 +213,24 @@ sql_value () {
   # V=$(sql_value "select 1 from dual;")
   #
   # execute an sql command and return the found value or ""
-  # NO extra echo commands!
+  # Do NOT execute any other output here
 
-  echo $(sqlplus -s -l / as sysdba <<EOF
+  # Remove trailing semi-colons
+  # and append just one.
+  local sql=$(echo "$1" | sed 's/[ ;]*$//g')";"
+
+  ret=$(sqlplus -s -l / as sysdba <<EOF
   set echo off heading off feedback off
-  $1
+  $sql
 EOF
 )
+  if [[ "$ret" =~ \* ]] ; then
+    # Often because of an error message in the statement's execution
+    echo "$ret"
+  else
+    # Remove superfluous blanks and line breaks
+    echo $ret
+  fi
 
 } # sql_value
 

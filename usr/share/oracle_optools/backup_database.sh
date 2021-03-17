@@ -3,7 +3,7 @@
 # backup_database.sh - backup the database regularly
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2019, roveda
+# Copyright 2016 - 2018, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -66,16 +66,19 @@
 #   Changed check for successful sourcing the environment to [ -z "$ORACLE_SID" ]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
-# 2019-01-02      roveda      0.04
-#   Added and corrected some comments.
+# 2019-07-16      roveda      0.04
+#   Checking role and status of database. Continue to backup only
+#   if it is PRIMARY,OPEN. Do nothing for PHYSICAL STANDBY,MOUNTED.
+#   Give error for anything else.
 #
 # ---------------------------------------------------------
 
 
 
 # Go to directory where this script is placed
-cd `dirname $0`
+cd $(dirname $0)
 
+. /usr/share/oracle_optools/ooFunctions
 
 # -----
 # Set environment
@@ -102,16 +105,14 @@ export LANG=C
 # Check if database backup is turned off
 
 # To turn off the database backup, you must enter the appropriate date
-# (yyyy-mm-dd) in file  /var/tmp/oracle_optools/${ORACLE_SID}/no_backup
+# (yyyy-mm-dd) in file  /var/tmp/oracle_${ORACLE_SID}.norman.
 # 
 
 if [ "`uname`" != "HP-UX" ] ; then
   # Check if current date (minus 12 hours) is listed in 
   # file /var/tmp/oracle_optools/${ORACLE_SID}/no_backup
 
-  # Date, 12 hours ago, (e.g.: 2018-12-15)
-  # When the backup starts at 02:00 the LOGICAL_START_DATE
-  # will point to the day before.
+  # Date, 12 hours ago, (e.g.: 2016-06-16)
   LOGICAL_START_DATE=$(date -d "-12 hours" +"%F")
 
   if [ -r /var/tmp/oracle_optools/${ORACLE_SID}/no_backup ] ; then
@@ -123,6 +124,26 @@ if [ "`uname`" != "HP-UX" ] ; then
     fi
   fi
 fi
+
+# -----
+# Check the role and status of the database
+
+ROLESTAT=$(./get_role_status.sh $ORAENV)
+
+ROLEPARAMETER=${2:-LEVEL0}
+
+case $ROLESTAT in
+  "PRIMARY,OPEN") # echo "$ROLESTAT"
+    # continue normally
+    ;;
+  "PHYSICAL STANDBY,MOUNTED") # echo "$ROLESTAT"
+    # add "_STANDBY" to the parameter
+    ROLEPARAMETER="${ROLEPARAMETER}_STANDBY"
+    ;;
+  *) echo "Anything else"
+    exiterr 2 "ERROR: This database role and status '$ROLESTAT' is not supported => ABORT"
+    ;;
+esac
 
 # -----
 # Backup of database
@@ -139,5 +160,5 @@ fi
 # Execute the RMAN commands of section [ORARMAN] and parameter LEVEL0
 # (or use the given second command line parameter as parameter)
 
-./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf  ${2:-LEVEL0}
+./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf  $ROLEPARAMETER
 

@@ -3,7 +3,7 @@
 # ora_housekeeping.pl - purge old audit entries
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016 - 2020, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -112,6 +112,11 @@
 # 2018-03-11      roveda      0.12
 #   Missing END IF corrected.
 #
+# 2019-07-24      roveda      0.13
+#   Restricted execution when running as physical standby in dataguard.
+#
+# 2020-07-27      roveda      0.14
+#   Added 'set serveroutput on' to PLSQL sections.
 #
 #   Change also $VERSION later in this script!
 #
@@ -128,7 +133,7 @@ use lib ".";
 use Misc 0.42;
 use Uls2 1.16;
 
-my $VERSION = 0.12;
+my $VERSION = 0.14;
 
 # ===================================================================
 # The "global" variables
@@ -195,6 +200,11 @@ my $ORACLE_VERSION = "";
 # this digit will be the same across the affected platforms.
 
 my ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO);
+
+# Database role (PRIMARY/PHYSICAL STANDBY)
+my $ORACLE_DBROLE = "";
+# Database status (OPEN/MOUNTED)
+my $ORACLE_DBSTATUS = "";
 
 
 # diagnostic_dest, used for 'set base $DIAG_DEST' in adrci
@@ -507,17 +517,34 @@ sub oracle_available {
   title(sub_name());
 
   # ----- Check if Oracle is available
-  my $sql = "select 'database status', status from v\$instance;";
+  my $sql = "
+    select 'database status', status from v\$instance;
+    SELECT 'database role', DATABASE_ROLE FROM V\$DATABASE;
+  ";
 
   if (! do_sql($sql)) {return(0)}
 
-  my $V = trim(get_value($TMPOUT1, $DELIM, "database status"));
-  print "OPEN=$V\n";
+  my $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
+  my $db_role = trim(get_value($TMPOUT1, $DELIM, "database role"));
 
-  if ($V ne "OPEN") {
-    output_error_message(sub_name() . ": Error: the database status is not 'OPEN'!");
+  # Set global variables
+  $ORACLE_DBSTATUS = $db_status;
+  $ORACLE_DBROLE = $db_role;
+
+  if ("$db_role, $db_status" eq "PRIMARY, OPEN" ) {
+    # role and status is ok, create AWR report
+    print "Database role $db_role and status $db_status is ok.\n";
+
+  } elsif ("$db_role, $db_status" eq "PHYSICAL STANDBY, MOUNTED") {
+    # role and status is ok, but no AWR report
+    print "Database role $db_role and status $db_status only allows restricted execution.\n";
+
+  } else {
+    # role and status is NOT ok, abort and error
+    output_error_message(sub_name() . ": Error: Database role $db_role and status $db_status do not allow an execution!");
     return(0);
   }
+
   return(1);
 
 } # oracle_available
@@ -527,6 +554,11 @@ sub oracle_available {
 sub purge_audit_entries {
 
   title("Purge Audit Entries");
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
+    return(0);
+  }
 
   my $default_keep_for_days = 90;
 
@@ -538,6 +570,9 @@ sub purge_audit_entries {
   print "Keeping the audit entries for: $keep_for_days days.\n";
 
   my $sql = "
+
+    set serveroutput on;
+
     select 'AUDIT_TRAIL: ' || to_char(upper(value)) from v\$parameter where lower(name) = 'audit_trail';
     select 'OLDEST_ENTRY (before purge): ' || to_char(min(TIMESTAMP), 'yyyy-mm-dd HH24:MI:SS') from dba_audit_session;
 
@@ -613,6 +648,11 @@ sub purge_unified_audit_entries {
 
   title("Purge Unified Audit Entries");
 
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
+    return(0);
+  }
+
   # -----
   my $sql = "select 'unified_auditing', upper(value) from v\$option where lower(parameter) = 'unified auditing';";
 
@@ -634,6 +674,8 @@ sub purge_unified_audit_entries {
   print "Keeping the unified audit entries for: $keep_for_days days.\n";
 
   $sql = "
+    set serveroutput on;
+
     DECLARE
       unified_auditing varchar(30);
       oldest_entry date;
@@ -1287,7 +1329,7 @@ runtime:
 #   proper execution of this script.
 # 
 
-Copyright 2016, 2017, roveda
+Copyright 2016 - 2020, roveda
 
 This file is part of Oracle OpTools.
 

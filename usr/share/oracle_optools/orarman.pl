@@ -3,7 +3,7 @@
 # orarman.pl - makes an online backup of an oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2008 - 2017, roveda
+# Copyright 2008 - 2019, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -144,6 +144,13 @@
 #   a message file is created and finally compressed and sent to ULS but 
 #   only if an error has occured.
 #
+# 2019-07-16      roveda      0.27
+#   Now accepting PRIMARY,OPEN and PHYSICAL STANDBY,MOUNTED as possible
+#   database roles and states. But, the given parameter must point to the 
+#   matching entry in the configuration file and the rman commands must match 
+#   the database role and status.
+#
+#
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
@@ -157,10 +164,10 @@ use File::Copy;
 
 # These are ULS-modules:
 use lib ".";
-use Misc 0.41;
+use Misc 0.42;
 use Uls2 1.16;
 
-my $VERSION = 0.26;
+my $VERSION = 0.27;
 
 # ===================================================================
 # The "global" variables
@@ -585,18 +592,30 @@ sub general_info {
 
   title("Checking for running Oracle instance");
 
-  my $sql = "select 'database status', status from v\$instance;";
+  my $sql = "
+    select 'database status', status from v\$instance;
+    SELECT 'database role', DATABASE_ROLE FROM V\$DATABASE;
+  ";
 
   if (! do_sql($sql)) {return(0)}
 
-  my $V = trim(get_value($TMPOUT1, $DELIM, "database status"));
-  if ($V ne "OPEN") {
-    output_error_message(sub_name() . ": Error: Database instance is not OPEN, but '$V'.");
-    return(0);
+  my $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
+  my $db_role = trim(get_value($TMPOUT1, $DELIM, "database role"));
+  print "Database role: $db_role, status: $db_status\n";
+
+  if ("$db_role, $db_status" eq "PRIMARY, OPEN" ) {
+    # role and status is ok
+    print "Database role and status is ok.\n";
+
+  } elsif ("$db_role, $db_status" eq "PHYSICAL STANDBY, MOUNTED") {
+    # role and status is ok
+    print "Database role and status is ok.\n";
+
   } else {
-    print "Database is OPEN => ok.\n";
+    # role and status is NOT ok
+    output_error_message(sub_name() . ": ERROR: Database instance has incompatible role and status: $db_role, $db_status.");
+    return(0);
   }
-  # uls_value($ts, "database status", $V, " ");
 
   # send_doc($ts);
 

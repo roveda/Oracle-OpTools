@@ -3,7 +3,7 @@
 # ora_grants.pl - revoke all and grant rights on Oracle database objects
 #
 # ---------------------------------------------------------
-# Copyright 2009 - 2017, roveda
+# Copyright 2009 - 2021, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -114,6 +114,11 @@
 # 2017-06-19      roveda      0.16
 #   Ignoring temporary compression advisor tables when granting privilges.
 #
+# 2021-01-26      roveda      0.17
+#   Added Support for multitenant databases. The PDB parameter can now be 
+#   set additionally in each section of the configuration file.
+#   Updated the module versions as of today.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -128,10 +133,10 @@ use File::Copy;
 
 # These are ULS-module:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.43;
+use Uls2 1.16;
 
-my $VERSION = 0.16;
+my $VERSION = 0.17;
 
 # ===================================================================
 # The "global" variables
@@ -199,6 +204,9 @@ my $IDENTIFIER;
 
 # Keeps the version of the oracle software
 my $ORACLE_VERSION = "";
+
+# Holds the pdb name (if PDB is defined in the configuration)
+my $USE_PDB = "";
 
 # Keeps the section name of the configuration file, in
 # which the grants are defined.
@@ -346,6 +354,13 @@ sub exec_sql {
   my $sql_command = $_[0];
   my $spool_filename = $_[1] || $TMPOUT1;
 
+  my $set_container = "";
+  # For PDBs
+  if ( $USE_PDB ) {
+    print "USE_PDB=$USE_PDB\n";
+    $set_container = "alter session set container=$USE_PDB;";
+  }
+
   # connect / as sysdba
 
   # Set nls_territory='AMERICA' to get decimal points.
@@ -353,6 +368,9 @@ sub exec_sql {
   my $sql = "
     set echo off
     alter session set nls_territory='AMERICA';
+
+    $set_container
+
     set newpage 0
     set space 0
     set linesize 32000
@@ -561,6 +579,7 @@ sub db_objects {
     select object_name from dba_objects
       where object_type in ($object_types)
         and owner = '$schema'
+        and status = 'VALID'
         and ( select db_link 
               from dba_synonyms 
               where owner = '$schema' 
@@ -1064,6 +1083,18 @@ print "Send the documentation during this run.\n";
 
 # uls_value($IDENTIFIER, "documentation", "transferring", " ");
 
+# -----
+# Check if a pdb is defined
+
+title("Check for PDB");
+
+$USE_PDB = "";
+if ($CFG{"$GRANTS_SECTION.PDB"}) {
+  $USE_PDB = $CFG{"$GRANTS_SECTION.PDB"};
+  print "PDB specified in configuration file: $USE_PDB\n";
+} else {
+  print "No PDB specified in configuration file.\n";
+}
 
 # ----- sqlplus command -----
 # Check, if the sqlplus command has been redefined in the configuration file.
@@ -1199,7 +1230,7 @@ script name, version:
 # 
 
 
-Copyright 2009-2016, roveda
+Copyright 2009-2021, roveda
 
 Oracle OpTools is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

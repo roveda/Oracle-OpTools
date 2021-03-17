@@ -3,7 +3,7 @@
 # ora_statspack.pl - make STATSPACK snapshots and generate reports
 #
 # ---------------------------------------------------------
-# Copyright 2013 - 2017, roveda
+# Copyright 2013 - 2019, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -113,6 +113,9 @@
 # 2017-03-21      roveda      0.13
 #   Fixed the broken support of sid specific configuration file.
 #
+# 2019-07-13      roveda      0.14
+#   No execution and no error when running as physical standby.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -126,10 +129,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.42;
+use Uls2 1.16;
 
-my $VERSION = 0.13;
+my $VERSION = 0.14;
 
 # ===================================================================
 # The "global" variables
@@ -497,14 +500,28 @@ sub oracle_available {
   title(sub_name());
 
   # ----- Check if Oracle is available
-  my $sql = "select 'database status', status from v\$instance;";
+  my $sql = "
+    select 'database status', status from v\$instance;
+    SELECT 'database role', DATABASE_ROLE FROM V\$DATABASE;
+  ";
 
   if (! do_sql($sql)) {return(0)}
 
-  my $V = trim(get_value($TMPOUT1, $DELIM, "database status"));
-  print "database status=$V\n";
+  my $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
+  my $db_role = trim(get_value($TMPOUT1, $DELIM, "database role"));
 
-  if ($V ne "OPEN") {
+  print "database role=$db_role, status=$db_status\n";
+
+  if ("$db_role, $db_status" eq "PRIMARY, OPEN" ) {
+    # role and status is ok, create AWR report
+    print "Database role $db_role and status $db_status is ok.\n";
+
+  } elsif ("$db_role, $db_status" eq "PHYSICAL STANDBY, MOUNTED") {
+    # role and status is ok, but no AWR report
+    return(2);
+
+  } else {
+    # role and status is NOT ok, no AWR report, error
     output_error_message(sub_name() . ": Error: the database status is not 'OPEN'!");
     return(0);
   }
@@ -1220,7 +1237,8 @@ if ($REPORT) {
 # The real work starts here.
 # ------------------------------------------------------------
 
-if (! oracle_available() ) {
+my $ret = oracle_available();
+if ($ret == 0) {
   output_error_message("$CURRPROG: Error: Oracle database is not available => aborting script.");
 
   clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
@@ -1230,6 +1248,17 @@ if (! oracle_available() ) {
   uls_flush(\%ULS);
 
   exit(1);
+
+} elsif ($ret == 2) {
+  print "INFO: The database role and database status is not suitable for STATSPACK actions.\n";
+  clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+
+  send_runtime($start_secs);
+  uls_timing($IDENTIFIER, "start-stop", "stop");
+  # Do not flush anything to ULS, be silent.
+  # uls_flush(\%ULS);
+
+  exit(0);
 }
 
 

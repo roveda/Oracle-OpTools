@@ -3,7 +3,7 @@
 #   ora_dbinfo.pl - collect information about an Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2011-2018, roveda
+# Copyright 2011 - 2021, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -201,8 +201,42 @@
 # 2018-08-01      roveda      0.36
 #   Added BIGFILE info for tablespaces.
 #
-# 2018-10-06      roveda      0.37
-#   Added extended info about unified auditing for Oracle 12.2
+# 2019-07-13      roveda      0.37
+#   No execution and no error when running as physical standby.
+#
+# 2019-10-15      roveda      0.38
+#   Added stat_prefs() which contains information about the global 
+#   optimizer statistics preferences which are used in the job
+#   'auto optimizer stats collection'.
+#
+# 2020-03-20      roveda      0.39
+#   Added informational text in part_2(), parameter section, especially for Oracle 12.2.
+#
+# 2020-09-21      roveda      0.40
+#   Get the full version (e.g. 19.7.0.0) for Oracle 19.
+#   Conditional execution for Oracle 19 in security_settings(), 
+#   the structure of AUDIT_UNIFIED_ENABLED_POLICIES has changed.
+#
+# 2020-09-23      roveda      0.41
+#   Double use of 'my $sql' corrected.
+#
+# 2020-10-21      roveda      0.42
+#   Added support for multitenant (pluggable) databases.
+#
+# 2020-11-03      roveda      0.43
+#   Chaged "Oracle Version" to "Oracle Full Version" for PDBs.
+#
+# 2020-11-11      roveda      0.44
+#   In Oracle 12.1 there is no column CREATION_TIME in dba_pdbs, 
+#   multitenant_info() changed accordingly.
+#
+# 2020-12-14      roveda      0.45
+#   Multitenant information is now 12.1.0.1 safe, and a text is added 
+#   to the report when no pluggable database is found (instead of an empty table).
+#
+# 2021-03-17      roveda      0.46
+#   Identifying if the database is a CDB fixed in part_1().
+#   It was constantly 'YES'.
 #
 #
 #   Change also $VERSION later in this script!
@@ -217,11 +251,11 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.42;
+use Misc 0.43;
 use Uls2 1.16;
 use HtmlDocument;
 
-my $VERSION = 0.37;
+my $VERSION = 0.46;
 
 # ===================================================================
 # The "global" variables
@@ -317,8 +351,30 @@ my $ORACLE_VERSION = "";
 
 my ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO);
 
+# Database role (PRIMARY/PHYSICAL STANDBY)
+my $ORACLE_DBROLE = "";
+# Database status (OPEN/MOUNTED)
+my $ORACLE_DBSTATUS = "";
+
+# Data Guard Role
+my $DG_ROLE = "NONE";
+
+# Keeps the list of all present pdbs (for the current cdb)
+my @PDB_LIST = ();
+
+# Holds the current pdb name (of @PDB_LIST)
+my $CURRENT_PDB = "";
+my $CURRENT_CON_ID = -1;
+
+# Status of the current PDB
+my $PDB_STATUS = "";
+
+# -----
 # This keeps the complete report (as html)
 my $HtmlReport = HtmlDocument->new();
+
+# Set the default css styles, see the appropriate section in the 
+# conf file to adjust the style to your taste.
 
 $HtmlReport->set_style("
   table {
@@ -601,9 +657,19 @@ sub exec_sql {
 
   # Set nls_territory='AMERICA' to get decimal points.
 
+  my $set_container = "";
+  # For PDBs
+  if ( $CURRENT_PDB ) {
+    print "CURRENT_PDB=$CURRENT_PDB\n";
+    $set_container = "alter session set container=$CURRENT_PDB;";
+  }
+
+
   my $sql = "
     set echo off
     alter session set nls_territory='AMERICA';
+
+    $set_container
     set newpage 0
     set space 0
     set linesize 32000
@@ -716,7 +782,8 @@ sub send_runtime {
   # Current time minus start time.
   my $rt = time - $_[0];
 
-  my $unit = uc($_[1]) || "S";
+  my $unit =  "S";
+  if ( $_[1] ) { $unit = uc($_[1]) }
 
   if    ($unit eq "M") { uls_value($IDENTIFIER, "runtime", pround($rt / 60.0, -1), "min") }
   elsif ($unit eq "H") { uls_value($IDENTIFIER, "runtime", pround($rt / 60.0 / 60.0, -2), "h") }
@@ -779,7 +846,7 @@ sub get_instance_ip {
   if ($host =~ /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) { return($host) }
 
   # Assume it is a hostname, must get ip:
-  # (mway not work on all flavours of Unix)
+  # (may not work on all flavours of Unix)
   print "Must resolve hostname to ip address.\n";
 
   my $ip = `gethostip -d $host`;
@@ -836,6 +903,11 @@ sub oracle_3d_version {
   my $elements = 4;
   if ($_[0]) { $elements = $_[0] }
 
+  if ($elements < 1 || $elements > 5) {
+    print STDERR "sub_name(): Error: Parameter may only be from 1 to 5, not: $elements!\n";
+    return(undef);
+  }
+
   my @E;
 
   if ($elements >= 1) { push(@E, $ORA_MAJOR_RELNO)       }
@@ -843,10 +915,6 @@ sub oracle_3d_version {
   if ($elements >= 3) { push(@E, $ORA_APPSERVER_RELNO)   }
   if ($elements >= 4) { push(@E, $ORA_COMPONENT_RELNO)   }
   if ($elements >= 5) { push(@E, $ORA_PLATFORM_RELNO)    }
-  if ($elements < 1 || $elements > 5) {
-    print STDERR "sub_name(): Error: Parameter may only be from 1 to 5, not: $elements!\n";
-    return;
-  }
 
   @E = map(sprintf("%03d", $_), @E);
   return(join(".", @E));
@@ -859,17 +927,34 @@ sub oracle_available {
   title(sub_name());
 
   # ----- Check if Oracle is available
-  my $sql = "select 'database status', status from v\$instance;";
+  my $sql = "
+    select 'database status', status from v\$instance;
+    SELECT 'database role', DATABASE_ROLE FROM V\$DATABASE;
+  ";
 
   if (! do_sql($sql)) {return(0)}
 
-  my $V = trim(get_value($TMPOUT1, $DELIM, "database status"));
-  print "OPEN=$V\n";
+  my $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
+  my $db_role = trim(get_value($TMPOUT1, $DELIM, "database role"));
 
-  if ($V ne "OPEN") {
-    output_error_message(sub_name() . ": Error: the database status is not 'OPEN'!");
+  # Set global variables
+  $ORACLE_DBSTATUS = $db_status;
+  $ORACLE_DBROLE = $db_role;
+
+  if ("$db_role, $db_status" eq "PRIMARY, OPEN" ) {
+    # role and status is ok, create AWR report
+    print "Database role $db_role and status $db_status is ok.\n";
+
+  } elsif ("$db_role, $db_status" eq "PHYSICAL STANDBY, MOUNTED") {
+    # role and status is ok, but no AWR report
+    print "Database role $db_role and status $db_status only allows restricted execution.\n";
+
+  } else {
+    # role and status is NOT ok, abort and error
+    output_error_message(sub_name() . ": Error: Database role $db_role and status $db_status do not allow an execution!");
     return(0);
   }
+
   return(1);
 
 } # oracle_available
@@ -885,6 +970,13 @@ sub option_usage {
   # 
   # NOTE: there is a newer version of this sub for 11.2.0.4 and for 12.1+, see below.
   #
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_heading(2, "Option Usage", "_default_");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+    return 0
+  }
 
   # if ( $ORACLE_VERSION !~ /^11\.2/ ) { return 0 }
   if ( $ORA_MAJOR_RELNO < 11 ) { 
@@ -1117,102 +1209,76 @@ sub multitenant_info {
   # see options_packs_usage_statistics.sql, MOS Note 1317265.1
   # For: Oracle Database - Version 11.2 and later
 
+  my $sql = "";
+  my $title_line = "CON_ID  $DELIM  PDB_NAME  $DELIM  CREATION_TIME  $DELIM  STATUS";
+
   title(sub_name());
 
-  my $opusfile = "/tmp/options_packs_usage_statistics.txt";
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_heading(2, "Multitenant Information", "_default_");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+    return(1);
+  }
 
-  if (-e $opusfile) {
-    my $age_of_file = (-M $opusfile) * 24 * 60;  # age of file in minutes
-    if ($age_of_file > 5) {
-      print "Removing old '$opusfile'...";
-      if (unlink($opusfile)) {print "done.\n"}
-      else {
-        print "failed.\n";
-        output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
-      }
-      # system('sqlplus / as sysdba @/usr/share/oracle_optools/options_packs_usage_statistics.sql');
-      exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
-    } else { 
-      print "File '$opusfile' is younger than 5 minutes, use it.\n";
-    }
+  my $ora3dversion = oracle_3d_version(4);
+
+  if ($ora3dversion lt "012.001.000.002") {
+    # 12.1.0.1 only
+    # Has column 'pdb_id' (but not 'con_id').
+    # Has column CREATION_SCN (but not 'CREATION_TIME').
+
+    $sql = "select pdb_id, pdb_name
+           , creation_scn
+           , status from dba_pdbs order by pdb_id;"
+    ;
+
+    $title_line = "PDB_ID  $DELIM  PDB_NAME  $DELIM  CREATION_SCN  $DELIM  STATUS";
+
+  } elsif ($ora3dversion lt "012.002.000.000") {
+    # 12.1.0.2
+    # Has column 'con_id'.
+    # Has column CREATION_SCN (but not 'CREATION_TIME').
+
+    $sql = "select con_id, pdb_name
+           , creation_scn
+           , status from dba_pdbs order by con_id;"
+    ;
+
+    $title_line = "CON_ID  $DELIM  PDB_NAME  $DELIM  CREATION_SCN  $DELIM  STATUS";
+
   } else {
-    exec_os_command("$SQLPLUS_COMMAND @" . "$OPUSSQL");
+    # 18, 19
+    # Has column 'con_id'.
+    # Has column 'CREATION_TIME'.
+
+    $sql = "select con_id, pdb_name
+           , to_char(creation_time, 'yyyy-mm-dd HH24:MI:SS')
+           , status from dba_pdbs order by con_id;"
+    ;
   }
 
-  if (! open(OPUSFILE, "<", $opusfile) ) {
-    print "Cannot open file $opusfile for reading!\n";
-    return(undef);
-  }
+  if (! do_sql($sql)) {return(0)}
 
-  my $in_table = 0;
-  my $headline = "";
-  my @report_lines = ();
-
-  while (my $line = <OPUSFILE>) {
-    chomp $line;
-    # -----
-    # Bail out, if the end of the table has been reached.
-    if ( $headline && $in_table && $line eq "" ) { last } 
-    # print "[$line]\n";
-
-    #
-    # if ( $in_table && $line eq "" ) {
-    #  # Finish compiled report before starting a new one:
-    #  if ($headline) {
-    #    print "=====================================================\n";
-    #    print "headline=$headline\n";
-    #    print join("\n", @report_lines), "\n\n\n";
-    #  }
-    #
-    #  @report_lines = ();
-    #  $headline = "";
-    #}
-
-    # -----
-    $in_table = 0;
-    # If the line contains |, then you are processing a table section.
-    if ( $line =~ /\|/ ) { $in_table = 1 }
-
-    # -----
-    # If specific expressions appear at the beginning of the line
-    # then you are processing a new headline.
-    # Do NOT abbreviate the expressions!
-
-    # if ($line =~ /^MULTITENANT INFORMATION|^PRODUCT USAGE|^FEATURE USAGE DETAILS/) {
-    if ($line =~ /^MULTITENANT INFORMATION/) {
-      # Start a new report (or report table)
-      $headline = $line;
-      $in_table = 0;
-    }
-
-    # -----
-    #
-    # CON_ID|NAME                          |OPEN_MODE       |RESTRICTED|REMARKS
-    # ------|------------------------------|----------------|----------|-------------------
-    #      0|mukuor2t                      |READ WRITE      |NO        |
-
-    # If you have a non-empty headline
-    if ($headline) {
-      # and if you are processing the lines of a table
-      if ($in_table) {
-        if ($line =~ /---/ ) {
-          # Ignore the lines with ---
-        } else {
-          # Then add this line to the resulting array of report lines
-          # print "[$line]\n";
-          push(@report_lines, $line);
-        }
-      }
-    }
-
-  } # while
-
-  close(OPUSFILE);
+  my @L = ();
+  get_value_lines(\@L, $TMPOUT1);
 
   $HtmlReport->add_heading(2, "Multitenant Information", "_default_");
-  # $HtmlReport->add_table(\@report_lines, $DELIM, "LLLLL", 1);
-  # Remember: the delimiter is the pipe '|' instead of my default '!'
-  $HtmlReport->add_table(\@report_lines, '\|', "LLLLL", 1);
+
+  if ( $#L >= 0 ) {
+    # Has found pluggable databases
+
+    # Prepend the title line
+    unshift(@L, $title_line);
+
+    # Add the pluggable databases list
+    $HtmlReport->add_table(\@L, $DELIM, "LLLL", 1);
+
+  } else {
+    # No pluggable databases found
+    $HtmlReport->add_paragraph('p', "This database instance has no pluggable databases.");
+  }
+
   $HtmlReport->add_goto_top("top");
 
   return(1);
@@ -1339,6 +1405,91 @@ A leading dot (.) denotes a product that is not a Database Option or Database Ma
 
 
 # -------------------------------------------------------------------
+sub options_packs_usage_statistics19 {
+  # This script just uses the options_packs_usage_statistics.sql script (2020-10)
+  # from Oracle Support and adds its output as 'code' to the html document.
+  # For a CDB it will return also all option usage for all open PDBs, 
+  # although that is redundant, as it is called also for each PDB.
+
+  # This sub only uses the PRODUCT USAGE section of the report.
+  # The detailed FEATURE USAGE DETAILS section is omitted.
+
+
+  title(sub_name());
+
+  my $tmp = $ENV{'TMP'} || $ENV{'TMPDIR'} || '/tmp';
+  my $sid = lc($ENV{'ORACLE_SID'});
+  my $pdb = "";
+  if ($CURRENT_PDB) {
+    $pdb = lc($CURRENT_PDB);
+  }
+  my $set_container = "";
+
+  # The original script
+  my $opussql = dirname($0) . "/options_packs_usage_statistics19.sql";
+
+  # The script that will be executed (will get some changes)
+  my $opussql2 = "$tmp/options_packs_usage_statistics19_$sid.sql";
+
+  # Output file of the above sql script
+  my $opusfile = "$tmp/options_packs_usage_statistics19_$sid.txt";
+
+  if ($pdb) {
+    # Change filenames for PDBs
+    $opussql2 = "$tmp/options_packs_usage_statistics19_${sid}_${pdb}.sql";
+    $opusfile = "$tmp/options_packs_usage_statistics19_${sid}_${pdb}.txt";
+    $set_container = "ALTER SESSION SET CONTAINER=$CURRENT_PDB;";
+  }
+
+  if (-e $opusfile) {
+    print "Removing old '$opusfile'...";
+    if (unlink($opusfile)) {print "done.\n"}
+    else {
+      print "failed.\n";
+      output_error_message(sub_name() . ": Error: Cannot remove existing '$opusfile'. $!");
+      return(undef);
+    }
+  }
+
+  # -----
+  # Use the original sql file, copy that to /tmp and replace the placeholder
+  #   '__SPOOLFILE__' with $opusfile and
+  #   '-- __SET_CONTAINER__' with 'ALTER SESSION SET CONTAINER=pdb1;'.
+
+  if (! open(OPUSSQL, "<", $opussql) ) {
+    output_error_message(sub_name() . ": Error: Cannot open file $opussql for reading!" .$!);
+    return(undef);
+  }
+  if (! open(OPUSSQL2, ">", $opussql2) ) {
+    output_error_message(sub_name() . ": Error: Cannot open file $opussql2 for writing!" .$!);
+    return(undef);
+  }
+  while(my $line = <OPUSSQL>) {
+    if ($set_container) {
+      $line =~ s/-- __SET_CONTAINER__/$set_container/g;
+    }
+    $line =~ s/__SPOOLFILE__/$opusfile/g;
+    print OPUSSQL2 $line;
+  }
+  close(OPUSSQL);
+  close(OPUSSQL2);
+
+  # -----
+  exec_os_command("$SQLPLUS_COMMAND @" . "$opussql2");
+
+  my $txt = `cat $opusfile`;
+
+  $HtmlReport->add_heading(2, "Options Packs Usage Statistics", "_default_");
+  $HtmlReport->add_paragraph('p', "Please refer to MOS DOC ID 1317265.1 and 1309070.1 for more information.");
+  $HtmlReport->add_paragraph('pre', $txt);
+  $HtmlReport->add_goto_top("top");
+
+  return(1);
+
+} # options_packs_usage_statistics19
+
+
+# -------------------------------------------------------------------
 sub product_usage  {
   # -----
   # This is for Oracle versions BELOW 11.2.0.4 only!
@@ -1354,6 +1505,14 @@ sub product_usage  {
   # http://docs.oracle.com/cd/E11882_01/license.112/e10594/options.htm
 
   title(sub_name());
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_heading(2, "Installed Feature", "_default_");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+    return 0
+  }
+
   my ($dbid) = @_;
 
   my $sql = "
@@ -1521,6 +1680,7 @@ sub part_1 {
 
   title(sub_name());
 
+  my $sql = "";
   my $txt = "";
   my @L = ();
 
@@ -1531,7 +1691,47 @@ sub part_1 {
 
   $HtmlReport->set_local_anchor_list();
 
-  my $sql = "
+  # -----
+  $sql = "select 'oracle version', version from v\$instance;";
+
+  if (! do_sql($sql)) {return(0)}
+  $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
+  # e.g. 10.1.0.3.0, 10.2.0.3.0
+  ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
+
+  # -----
+  # VERSION_FULL is only available for Oracle 18
+  # Refresh the version to the full version like 18.7.0.0
+  # Overwrite the previous values.
+
+  $sql = "";
+
+  if ($ORA_MAJOR_RELNO >= 18 ) {
+    if ( $sql ) { $sql .= "\n" }
+    $sql .= "select 'oracle full version', version_full from v\$instance;";
+  }
+  if ($ORA_MAJOR_RELNO >= 12 ) {
+    if ( $sql ) { $sql .= "\n" }
+    $sql .= "select 'is_cdb', cdb from v\$database;";
+  }
+
+  my $is_cdb = "NO";
+  if ($sql ) {
+    if (! do_sql($sql)) {return(0)}
+
+    my $ovf = trim(get_value($TMPOUT1, $DELIM, "oracle version full"));
+    if ( $ovf ) { 
+      $ORACLE_VERSION = trim(get_value($TMPOUT1, $DELIM, "oracle full version"));
+      ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
+    }
+
+    my $iamacdb = uc(trim(get_value($TMPOUT1, $DELIM, "is_cdb")));
+    # Only if it is found in the results
+    if ( $iamacdb ) { $is_cdb = $iamacdb }
+  }
+
+  # -----
+  $sql = "
     select 'oracle version', version from v\$instance;
     select 'hostname',       host_name from v\$instance;
     select 'platform',       platform_name from v\$database;
@@ -1541,6 +1741,7 @@ sub part_1 {
     select 'created',        TO_CHAR(created,'YYYY-MM-DD HH24:MI:SS') from v\$database;
     select 'DBID',           dbid from v\$database;
     select 'DATABASE_ROLE',  DATABASE_ROLE from v\$database;
+    select 'DATABASE_STATUS',  STATUS from v\$instance;
     select 'GUARD_STATUS',   GUARD_STATUS from v\$database;
     select 'DB_UNIQUE_NAME', DB_UNIQUE_NAME from v\$database;
     select 'FLASHBACK_ON',   FLASHBACK_ON from v\$database;
@@ -1550,9 +1751,9 @@ sub part_1 {
 
   if (! do_sql($sql)) {return(0)}
 
-  $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
-  # e.g. 10.1.0.3.0, 10.2.0.3.0
-  ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
+  # $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
+  # # e.g. 10.1.0.3.0, 10.2.0.3.0
+  # ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
 
   append2inventory("# date generated", $dt);
   append2inventory("DBENGINE", "Oracle");
@@ -1594,6 +1795,8 @@ sub part_1 {
   , "DBID                 ! $dbid"
   , "Database created     ! $database_created"
   , "Database role        ! " . trim(get_value($TMPOUT1, $DELIM, "DATABASE_ROLE"))
+  , "Is a CDB             ! " . $is_cdb
+  , "Database status      ! " . trim(get_value($TMPOUT1, $DELIM, "DATABASE_STATUS"))
   , "Archive log mode     ! " . trim(get_value($TMPOUT1, $DELIM, "LOG_MODE"))
   , "Flashback            ! " . trim(get_value($TMPOUT1, $DELIM, "FLASHBACK_ON"))
   , "Force Logging        ! " . trim(get_value($TMPOUT1, $DELIM, "FORCE_LOGGING"))
@@ -1606,6 +1809,42 @@ sub part_1 {
   ];
 
   $HtmlReport->add_table($aref, "!", "LL", 0);
+  $HtmlReport->add_goto_top("top");
+
+  # -----
+  # Check for PDBs
+
+  if ( $is_cdb ne 'YES' ) {
+    print "This is not a container database, no pluggable databases.\n";
+  } else {
+    print "I am a container database, check for pluggable databases.\n";
+    # Leave out the PDBSEED
+
+    $sql = "SELECT NAME, CON_ID FROM V\$PDBS WHERE CON_ID > 2 ORDER BY CON_ID;";
+    if (! do_sql($sql)) {return(0)}
+
+    # -----
+    # Fill the global @PDB_LIST with all pdb names
+
+    my @pdbs;
+    get_value_lines(\@pdbs, $TMPOUT1);
+
+    # Walk over all lines (which are PDBs)
+    # Remember: each line contains a delimiter.
+
+    foreach my $pdb (@pdbs) {
+
+      my @p = split($DELIM, $pdb);
+      @p = map(trim($_), @p);
+      # There is only one PDB per line
+      my ($p, $conid) = @p;
+
+      push(@PDB_LIST, "$p|$conid");
+
+    } # foreach pdb
+
+  } # is_cdb
+
 
   # -----
   # Incarnations
@@ -1638,9 +1877,6 @@ resetlogs time: Resetlogs timestamp for the incarnation of the current row<br>
 status: ORPHAN incarnation, CURRENT incarnation of the database, PARENT of the current incarnation<br>
 resetlogs id: Branch ID for the incarnation of the current row (used by user-managed recovery/RMAN restore to get unique names for archived logs across incarnations) ");
   }
-
-  
-
 
   # -----
   # Environment variables
@@ -1678,37 +1914,40 @@ resetlogs id: Branch ID for the incarnation of the current row (used by user-man
   # -----
   # components
 
-  $sql = "
-    select
-      COMP_NAME, VERSION, STATUS,
-      to_char(to_date(MODIFIED, 'DD-MON-YYYY HH24:MI:SS'), 'YYYY-MM-DD HH24:MI:SS')
-    from dba_registry
-    order by COMP_NAME
-    ;
-  ";
+  if ($ORACLE_DBSTATUS eq "OPEN") {
+    $sql = "
+      select
+        COMP_NAME, VERSION, STATUS,
+        to_char(to_date(MODIFIED, 'DD-MON-YYYY HH24:MI:SS'), 'YYYY-MM-DD HH24:MI:SS')
+      from dba_registry
+      order by COMP_NAME
+      ;
+    ";
 
-  if (! do_sql($sql)) {return(0)}
+    if (! do_sql($sql)) {return(0)}
 
-  @L = ();
-  get_value_lines(\@L, $TMPOUT1);
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
 
-  # - inventory
-  foreach my $i (@L) {
-    my @E = split($DELIM, $i);
-    @E = map(trim($_), @E);
+    # - inventory
+    foreach my $i (@L) {
+      my @E = split($DELIM, $i);
+      @E = map(trim($_), @E);
 
-    append2inventory("ORACLECOMPONENT", $E[0], $E[1]);
-  }
+      append2inventory("ORACLECOMPONENT", $E[0], $E[1]);
+    }
 
-  # - report
+    # - report
 
-  # prepend a title line
-  unshift(@L, "component  $DELIM  version  $DELIM  status  $DELIM  last modified");
+    # prepend a title line
+    unshift(@L, "component  $DELIM  version  $DELIM  status  $DELIM  last modified");
 
-  $HtmlReport->add_heading(2, "Components", "_default_");
-  $HtmlReport->add_table(\@L, $DELIM, "LLLL", 1);
-  $HtmlReport->add_goto_top("top");
-
+    $HtmlReport->add_heading(2, "Components", "_default_");
+    $HtmlReport->add_table(\@L, $DELIM, "LLLL", 1);
+    $HtmlReport->add_goto_top("top");
+  } else {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+  } # eq OPEN
 
 
   # -----
@@ -1731,8 +1970,10 @@ resetlogs id: Branch ID for the incarnation of the current row (used by user-man
 
   if ($version_3d lt "011.002.000.004") {
     product_usage($dbid);
-  } elsif ($version_3d ge "011.002.000.004") {
+  } elsif ($version_3d ge "011.002.000.004" && $version_3d lt "019.000.000.000") {
     product_usage11_2_0_4($dbid);
+  } elsif ($version_3d ge "019.000.000.000") {
+    # do nothing here
   } else {
     print "No product usage available for Oracle $ORACLE_VERSION ($version_3d)!\n";
   }
@@ -1746,10 +1987,17 @@ resetlogs id: Branch ID for the incarnation of the current row (used by user-man
     print "No option or feature usage available for Oracle 10 or older like this $ORACLE_VERSION ($version_3d)!\n";
   } elsif ($version_3d lt "011.002.000.004" ) {
     option_usage();
-  } elsif ($version_3d ge "011.002.000.004" ) {
+  } elsif ($version_3d ge "011.002.000.004" && $version_3d lt "019.000.000.000" ) {
     feature_usage_details11_2_0_4();
+  } elsif ($version_3d ge "019.000.000.000") {
+    # do nothing here
   } else {
     print "No option usage available for Oracle $ORACLE_VERSION ($version_3d)!\n";
+  }
+
+  # Complete output for Oracle 19+
+  if ($version_3d ge "019.000.000.000" ) {
+    options_packs_usage_statistics19();
   }
 
   # -----
@@ -1787,31 +2035,36 @@ resetlogs id: Branch ID for the incarnation of the current row (used by user-man
   # -----
   # Additional patch information from registry$history
 
-  $sql = "
-    select 
-        to_char(action_time, 'YYYY-MM-DD HH24:MI:SS')
-      , action
-      , namespace
-      , version 
-      , bundle_series 
-      , comments
-    from registry\$history
-    order by 1
-    ;
+  if ($ORACLE_DBSTATUS eq "OPEN") {
+    $sql = "
+      select 
+          to_char(action_time, 'YYYY-MM-DD HH24:MI:SS')
+        , action
+        , namespace
+        , version 
+        , bundle_series 
+        , comments
+      from registry\$history
+      order by 1
+      ;
 
-  ";
+    ";
 
-  if (! do_sql($sql)) {return(0)}
+    if (! do_sql($sql)) {return(0)}
 
-  @L = ();
-  get_value_lines(\@L, $TMPOUT1);
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
 
-  # prepend a title line
-  unshift(@L, "timestamp  $DELIM  action  $DELIM  namespace  $DELIM  version $DELIM bundle_series $DELIM comments ");
+    # prepend a title line
+    unshift(@L, "timestamp  $DELIM  action  $DELIM  namespace  $DELIM  version $DELIM bundle_series $DELIM comments ");
 
-  $HtmlReport->add_heading(2, "Registry History", "_default_");
-  $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
-  $HtmlReport->add_goto_top("top");
+    $HtmlReport->add_heading(2, "Registry History", "_default_");
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
+    $HtmlReport->add_paragraph('p', "The 'version' often contains expressions like: 19.8.0.0.200714OJVMRU where 200714 is the date of the patch: 2020-07-14.");
+    $HtmlReport->add_goto_top("top");
+  } else {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+  } # eq OPEN
 
   return(1);
 } # part_1
@@ -1825,6 +2078,7 @@ sub part_2 {
 
   my @L = ();
   my $txt = "";
+  my $sql = "";
 
   # -----
   # Parameters
@@ -1837,54 +2091,98 @@ sub part_2 {
   #   order by name;
   # ";
 
-  my $sql = "
-    select rtrim(name)
-    , rtrim(display_value)
-    , rtrim(isdefault)
-    , rtrim(ismodified)
-    from gv\$parameter2
+  if ( oracle_3d_version() lt "019.000.000.000") {
+    $sql = "
+      select name
+      , display_value
+      , isdefault
+      , ismodified
+      from gv\$parameter2
+      order by name;
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    unshift(@L, "parameter  $DELIM  value $DELIM is modified $DELIM is default");
+
+    $HtmlReport->add_heading(2, "Parameters", "_default_");
+    if ( oracle_3d_version(2) eq "012.002" ) {
+      $HtmlReport->add_paragraph('p', "In Oracle 12.2 there may be some underscore parameters added because the STATISTICS_LEVEL was changed. This is expected behavior, see: When Changing STATISTICS_LEVEL Parameter On 12.2.0.1, Few Extra Parameters Are Also Added To Spfile (Doc ID 2282692.1)");
+    }
+    $HtmlReport->add_table(\@L, $DELIM, "LLLL", 1);
+    $HtmlReport->add_goto_top("top");
+
+  } else {
+    # Oracle 19+
+
+    $sql = "
+    select
+      case con_id
+        when 0 then 'ALL'
+        when 1 then 'CDB ONLY'
+      end FOR_CONTAINER
+    , name
+    , display_value
+    , ismodified
+    , isdefault
+    , DESCRIPTION
+    from V\$SYSTEM_PARAMETER2
+    where con_id <= 1
     order by name;
   ";
 
+    if (! do_sql($sql)) {return(0)}
 
-  if (! do_sql($sql)) {return(0)}
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
 
-  @L = ();
-  get_value_lines(\@L, $TMPOUT1);
+    unshift(@L, "for container $DELIM  parameter  $DELIM  value $DELIM is modified $DELIM is default $DELIM description");
 
-  unshift(@L, "parameter  $DELIM  value $DELIM is modified $DELIM is default");
+    $HtmlReport->add_heading(2, "Parameters", "_default_");
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
+    $HtmlReport->add_goto_top("top");
 
-  $HtmlReport->add_heading(2, "Parameters", "_default_");
-  $HtmlReport->add_table(\@L, $DELIM, "LLLL", 1);
-  $HtmlReport->add_goto_top("top");
+  } # Oracle 19
+
 
   # -----
   # database and instance NLS parameters
 
-  # Use concatenation to avoid the substitution question
-  $sql = "
-    SELECT
-       db.parameter as parameter,
-       nvl(db.value, '&' || 'nbsp;') as database_value,
-       nvl(i.value, '&' || 'nbsp;') as instance_value
-    FROM nls_database_parameters db
-    LEFT JOIN nls_instance_parameters i ON i.parameter = db.parameter
-    ORDER BY parameter;
-  ";
+  # At least the instance NLS parameters seem to be modifiable in PDBs.
+  # So show them (all).
 
-  if (! do_sql($sql)) {return(0)}
+  if ($ORACLE_DBSTATUS eq "OPEN") {
 
-  @L = ();
-  get_value_lines(\@L, $TMPOUT1);
+    # Use concatenation to avoid the substitution question
+    $sql = "
+      SELECT
+         db.parameter as parameter,
+         nvl(db.value, '&' || 'nbsp;') as database_value,
+         nvl(i.value, '&' || 'nbsp;') as instance_value
+      FROM nls_database_parameters db
+      LEFT JOIN nls_instance_parameters i ON i.parameter = db.parameter
+      ORDER BY parameter;
+    ";
 
-  # Insert title
-  unshift(@L, "NLS PARAMETER  $DELIM  NLS_DATABASE_PARAMETERS   $DELIM   NLS_INSTANCE_PARAMETERS");
+    if (! do_sql($sql)) {return(0)}
 
-  $HtmlReport->add_heading(2, "NLS Database and Instance Parameters", "_default_");
-  $HtmlReport->add_paragraph('p', "NLS_DATABASE_PARAMETERS show the initially defined values of the NLS parameters for the database. These are fixed at the database level and cannot be changed, some can be overridden by NLS_INSTANCE_PARAMETERS. NLS_CHARACTERSET and NLS_NCHAR_CHARACTERSET can NOT be changed, though!");
-  $HtmlReport->add_paragraph('p', "NLS_INSTANCE_PARAMETERS show the current NLS instance parameters that have been explicitly set to override the invariable NLS_DATABASE_PARAMETERS. This is the base from which the NLS_SESSION_PARAMETRS are derived (the effective parameters for the user session). Note that enviroment variables like NLS_LANG which can be effective in a user session do overwrite the NLS_INSTANCE_PARAMETERS.");
-  $HtmlReport->add_table(\@L, $DELIM, "LLL", 1);
-  $HtmlReport->add_goto_top("top");
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    # Insert title
+    unshift(@L, "NLS PARAMETER  $DELIM  NLS_DATABASE_PARAMETERS   $DELIM   NLS_INSTANCE_PARAMETERS");
+
+    $HtmlReport->add_heading(2, "NLS Database and Instance Parameters", "_default_");
+    $HtmlReport->add_paragraph('p', "NLS_DATABASE_PARAMETERS show the initially defined values of the NLS parameters for the database. These are fixed at the database level and cannot be changed, some can be overridden by NLS_INSTANCE_PARAMETERS. NLS_CHARACTERSET and NLS_NCHAR_CHARACTERSET can NOT be changed, though!");
+    $HtmlReport->add_paragraph('p', "NLS_INSTANCE_PARAMETERS show the current NLS instance parameters that have been explicitly set to override the invariable NLS_DATABASE_PARAMETERS. This is the base from which the NLS_SESSION_PARAMETRS are derived (the effective parameters for the user session). Note that enviroment variables like NLS_LANG which can be effective in a user session do overwrite the NLS_INSTANCE_PARAMETERS.");
+    $HtmlReport->add_table(\@L, $DELIM, "LLL", 1);
+    $HtmlReport->add_goto_top("top");
+  } else {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+  }
 
 } # part_2
 
@@ -1904,6 +2202,7 @@ sub security_settings {
   # Show enabled policies
   # select POLICY_NAME, ENABLED_OPT, USER_NAME, SUCCESS, FAILURE
   # from AUDIT_UNIFIED_ENABLED_POLICIES;
+  # ATT: The structure has changed (at least) for Oracle 19, see sql below.
 
   # Also the audit options for all enabled policies?
   # That would be (for all POLICY_NAME in AUDIT_UNIFIED_ENABLED_POLICIES):
@@ -1914,14 +2213,7 @@ sub security_settings {
   title(sub_name());
 
   $HtmlReport->add_heading(2, "Security Settings", "_default_");
-
   $HtmlReport->add_heading(3, "Unified Auditing", "_default_");
-
-  if ($ORA_MAJOR_RELNO < 12 ) {
-    $HtmlReport->add_paragraph('p', "Unified Auditing is only available starting with Oracle 12.1, not for $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO.");
-    $HtmlReport->add_goto_top("top");
-    return(0);
-  }
 
   my @L = ();
   my $txt = "";
@@ -1948,75 +2240,68 @@ sub security_settings {
   $HtmlReport->add_paragraph('p', "Unified Auditing is enabled.");
 
   # -----
-  # Check AUDIT_TRAIL, must be: DB or DB,EXTENDED
-
-  $sql = "
-    select 'audit_trail', upper(value) from v\$parameter where lower(name) = 'audit_trail';
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  $V = trim(get_value($TMPOUT1, $DELIM, "audit_trail"));
-  print "AUDIT_TRAIL=$V\n";
-
-  if ($V !~ /DB/i ) {
-    $HtmlReport->add_paragraph('p', "AUDIT_TRAIL is set to '$V', but not to 'DB' or 'DB,EXTENDED'.");
-    $HtmlReport->add_goto_top("top");
-    return(1);
-  }
-  $HtmlReport->add_paragraph('p', "AUDIT_TRAIL is set to '$V'.");
-
-  # -----
   # Get enabled Auditing Policies
 
-  if (oracle_3d_version() =~ /^012.001/ ) {
-    $sql = "
-      select
-        USER_NAME  
-      , POLICY_NAME
-      , ENABLED_OPT
-      , SUCCESS    
-      , FAILURE    
-      FROM AUDIT_UNIFIED_ENABLED_POLICIES
-      order by 1,2;
-    ";
-  
-    if (! do_sql($sql)) {return(0)}
+  if ($ORACLE_DBSTATUS eq "OPEN") {
 
-    @L = ();
-    get_value_lines(\@L, $TMPOUT1);
+    if ( $ORA_MAJOR_RELNO < 19 ) {
+      # pre Oracle 19 (Oracle 18 is not supported by this script, though)
 
-    unshift(@L, "USER_NAME  $DELIM  POLICY_NAME   $DELIM   ENABLED_OPT  $DELIM  SUCCESS  $DELIM  FAILURE");
+      $sql = "
+        select
+        USER_NAME, POLICY_NAME, ENABLED_OPT, SUCCESS, FAILURE    
+        FROM AUDIT_UNIFIED_ENABLED_POLICIES
+        order by 1,2;
+      ";
 
-    $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
+      if (! do_sql($sql)) {return(0)}
+
+      @L = ();
+      get_value_lines(\@L, $TMPOUT1);
+
+      unshift(@L, "USER_NAME  $DELIM  POLICY_NAME   $DELIM   ENABLED_OPT  $DELIM  SUCCESS  $DELIM  FAILURE");
+
+      $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
+
+    } else { 
+
+      # Oracle 19
+      $sql = "
+        select
+          POLICY_NAME, ENABLED_OPTION, ENTITY_NAME, ENTITY_TYPE, SUCCESS, FAILURE
+        FROM AUDIT_UNIFIED_ENABLED_POLICIES
+        order by 1,2,3;
+      ";
+
+      if (! do_sql($sql)) {return(0)}
+
+      @L = ();
+      get_value_lines(\@L, $TMPOUT1);
+
+      unshift(@L, "POLICY_NAME  $DELIM ENABLED_OPTION $DELIM  ENTITY_NAME  $DELIM  ENTITY_TYPE  $DELIM  SUCCESS  $DELIM  FAILURE");
+
+      $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
+
+      # -----
+      # TODO
+      # Definitions of non-standard policies
+
+
+    }  # Oracle 19
+
+    # -----
+    # NOTE: These initialization parametes have no effect
+    #       when unified auditing is enabled.
+    # AUDIT_TRAIL
+    # AUDIT_FILE_DEST
+    # AUDIT_SYS_OPERATIONS
+    # AUDIT_SYSLOG_LEVEL
+
+    $HtmlReport->add_paragraph('p', "Keep in mind that the following initialization parametes have no effect when unified auditing is enabled:<br>AUDIT_TRAIL<br>AUDIT_FILE_DEST<br>AUDIT_SYS_OPERATIONS<br>AUDIT_SYSLOG_LEVEL.");
+
     $HtmlReport->add_goto_top("top");
-
-  } elsif (oracle_3d_version() =~ /^012.002/ ) {
-    $sql = "
-      select
-        USER_NAME
-      , POLICY_NAME
-      , ENABLED_OPT
-      , ENABLED_OPTION
-      , ENTITY_NAME
-      , ENTITY_TYPE
-      , SUCCESS
-      , FAILURE
-      FROM AUDIT_UNIFIED_ENABLED_POLICIES
-      order by 1,2;
-    ";
-
-    if (! do_sql($sql)) {return(0)}
-
-    @L = ();
-    get_value_lines(\@L, $TMPOUT1);
-
-    unshift(@L, "USER_NAME $DELIM POLICY_NAME $DELIM ENABLED_OPT $DELIM ENABLED_OPTION $DELIM ENTITY_NAME $DELIM ENTITY_TYPE $DELIM SUCCESS $DELIM FAILURE");
-
-    $HtmlReport->add_table(\@L, $DELIM, "LLLLLLLL", 1);
-
   } else {
-  $HtmlReport->add_paragraph('p', "Oracle version $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO is currently not supported by this script.");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
   }
 
   return(0);
@@ -2213,6 +2498,10 @@ sub part_7 {
 sub datafiles {
   # datafiles(<tablespace>, <contents>);
 
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+  }
+
   my ($ts, $contents) = @_;
 
   my $sql;
@@ -2266,6 +2555,8 @@ sub part_8_til10 {
   # Tablespaces, datafiles
 
   title(sub_name());
+
+
 
   # This will work for all Oracle Versions, specifically up to 10.2
   my $sql = "
@@ -2340,6 +2631,13 @@ sub part_8_11plus {
   # Tablespaces, datafiles
 
   title(sub_name());
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_heading(2, "Tablespaces", "_default_");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+    return(0);
+  }
 
   # Not sure, if this will work for older versions.
   my $sql = "
@@ -2670,6 +2968,543 @@ sub part_11 {
 
 
 # -------------------------------------------------------------------
+sub stat_prefs {
+  # optimizer statistics preferences
+
+  title(sub_name());
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_heading(2, "Optimizer Statistics Preferences", "_default_");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+    return(0);
+  }
+
+  my $sql = "
+    select 'stats_prefs'
+      , trim(substr(dbms_stats.get_prefs('AUTOSTATS_TARGET'), 1, 20))
+      , trim(substr(dbms_stats.get_prefs('CASCADE'), 1, 20))
+      , trim(substr(dbms_stats.get_prefs('ESTIMATE_PERCENT'), 1, 20))
+      , trim(substr(dbms_stats.get_prefs('GRANULARITY'), 1, 20))
+      , trim(substr(dbms_stats.get_prefs('STALE_PERCENT'), 1, 20)) from dual
+    ;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $autostats_target = trim(get_value($TMPOUT1, $DELIM, 'stats_prefs', 2));
+  my $cascade          = trim(get_value($TMPOUT1, $DELIM, 'stats_prefs', 3));
+  my $estimate_percent = trim(get_value($TMPOUT1, $DELIM, 'stats_prefs', 4));
+  my $granularity      = trim(get_value($TMPOUT1, $DELIM, 'stats_prefs', 5));
+  my $stale_percent    = trim(get_value($TMPOUT1, $DELIM, 'stats_prefs', 6));
+
+  my $aref = [
+      "AUTOSTATS_TARGET : $autostats_target"
+    , "CASCADE          : $cascade"
+    , "ESTIMATE_PERCENT : $estimate_percent"
+    , "GRANULARITY      : $granularity"
+    , "STALE_PERCENT    : $stale_percent"
+  ];
+
+  $HtmlReport->add_heading(2, "Optimizer Statistics Preferences", "_default_");
+  $HtmlReport->add_paragraph('p', "Current global statistic preferences for 'auto optimizer stats collection'. See dbms_stats.set_global_prefs and dbms_stats.get_prefs on how to set and request global statistic preferences.");
+  $HtmlReport->add_table($aref, ":", "LL", 0);
+  $HtmlReport->add_goto_top("top");
+
+} # stat_prefs
+
+
+# ===================================================================
+# PDB subs
+
+
+# -------------------------------------------------------------------
+sub get_ip_port {
+
+  title(sub_name());
+
+  my $sql = "";
+
+  $sql = "select 'local_listener', value from v\$listener_network 
+          where type = 'LOCAL LISTENER';
+  ";
+
+  if (! do_sql($sql)) {return( (undef, undef) )}
+
+  my $local_listener = trim(get_value($TMPOUT1, $DELIM, "local_listener"));
+
+  # \s whitespace
+  # \S non-whitespace
+  $local_listener =~ /\(HOST\s*=\s*(\S+?)\s*\)/;
+  my $host = $1;
+
+  # nothing found
+  if (! $host) {
+    print "No HOST parameter found in LOCAL LISTENER output!\n";
+    return( (undef, undef) );
+  }
+
+  # Is it an ip already?
+  # Check for digits at the beginning.
+  if ($host =~ /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) { 
+    print "'$host' is already an ip address, no lookup necessary.\n";
+  } else {
+    # Assume it is a hostname, must get ip:
+    # (may not work on all flavours of Unix)
+    print "Must resolve hostname to ip address.\n";
+
+    my $ip = `gethostip -d $host`;
+    chomp($ip);
+    if ( $ip =~ /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/ ) { 
+      print "'$host' resolved to '$ip'\n";
+      $host = $ip;
+    } else {
+      print "No valid ip address found!\n";
+      return( (undef, undef) );
+    }
+  }
+
+  # -----
+  $local_listener =~ /\(PORT\s*=\s*(\S+?)\s*\)/;
+  my $port = $1;
+
+  # nothing found
+  if (! $port) {
+    print "No PORT parameter found in LOCAL LISTENER output!\n";
+    return( (undef, undef) );
+  }
+
+  # Is it a port?
+  # Check for digits at the beginning.
+  if ($port =~ /\d{1,5}/) { 
+    print "'$port' is a valid number.\n";
+  } else {
+    print "'$port' is not a valid number!\n";
+    return( (undef, undef) );
+  }
+
+  return( ($host, $port) );
+
+} # get_ip_port
+
+
+# -------------------------------------------------------------------
+sub part_1_pdb {
+  # Oracle version, components (what is installed), features, options, opatch lsinventory, environment variables
+
+  title(sub_name());
+
+  my $sql = "";
+  my $txt = "";
+  my @L = ();
+
+  my $dt = iso_datetime();
+
+  $HtmlReport->add_heading(1, "Oracle Pluggable Database Information Report");
+  $HtmlReport->add_paragraph('p', "Generated: $dt");
+
+  $HtmlReport->set_local_anchor_list();
+
+  # -----
+  $sql = "select 'oracle version', version from v\$instance;";
+
+  if (! do_sql($sql)) {return(0)}
+  $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
+  # e.g. 10.1.0.3.0, 10.2.0.3.0
+  ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
+
+  # -----
+  # VERSION_FULL is only available for Oracle 19
+  # Refresh the version to the full version like 19.7.0.0
+  # Overwrite the previous values.
+
+  if ($ORA_MAJOR_RELNO >= 19 ) {
+    $sql = "select 'oracle full version', version_full from v\$instance;";
+    if (! do_sql($sql)) {return(0)}
+    $ORACLE_VERSION = trim(get_value($TMPOUT1, $DELIM, "oracle full version"));
+    ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
+  }
+
+  # -----
+  $sql = "
+    select 'cdb', host_name, instance_name from v\$instance;
+    select 'pdb1', con_id, name, dbid, TO_CHAR(CREATION_TIME,'YYYY-MM-DD HH24:MI:SS'), open_mode, max_size, to_char(open_time, 'YYYY-MM-DD HH24:MI:SS') from v\$pdbs;
+    select 'pdb2', force_logging, refresh_mode, REFRESH_INTERVAL, guid, status from dba_pdbs;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $my_hostname  = trim(get_value($TMPOUT1, $DELIM, "cdb", 2));
+  my $my_cdb_name  = trim(get_value($TMPOUT1, $DELIM, "cdb", 3));
+
+  my $my_con_id    = trim(get_value($TMPOUT1, $DELIM, "pdb1", 2));
+  my $my_pdb_name  = trim(get_value($TMPOUT1, $DELIM, "pdb1", 3));
+  my $my_dbid      = trim(get_value($TMPOUT1, $DELIM, "pdb1", 4));
+  my $my_created   = trim(get_value($TMPOUT1, $DELIM, "pdb1", 5));
+  my $my_open_mode = trim(get_value($TMPOUT1, $DELIM, "pdb1", 6));
+  my $my_max_size  = trim(get_value($TMPOUT1, $DELIM, "pdb1", 7));
+  my $my_open_time = trim(get_value($TMPOUT1, $DELIM, "pdb1", 8));
+
+
+  my $my_force_log    = trim(get_value($TMPOUT1, $DELIM, "pdb2", 2));
+  my $my_refresh_mode = trim(get_value($TMPOUT1, $DELIM, "pdb2", 3));
+  my $my_refresh_int  = trim(get_value($TMPOUT1, $DELIM, "pdb2", 4));
+  my $my_guid         = trim(get_value($TMPOUT1, $DELIM, "pdb2", 5));
+  my $my_status       = trim(get_value($TMPOUT1, $DELIM, "pdb2", 6));
+
+  # $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
+  # # e.g. 10.1.0.3.0, 10.2.0.3.0
+  # ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO) = split(/\./, $ORACLE_VERSION);
+
+  append2inventory("# date generated", $dt);
+  append2inventory("DBENGINE", "Oracle");
+
+  append2inventory("ORACLEVERSION", $ORACLE_VERSION);
+  append2inventory("DBVERSION", $ORACLE_VERSION);
+
+  my $my_instance = trim(get_value($TMPOUT1, $DELIM, "instance name"));
+  append2inventory("ORACLEINSTANCE", $my_pdb_name);
+  append2inventory("DBINSTANCE", $my_pdb_name);
+  append2inventory("ORACLEDBID", $my_dbid);
+
+  my ($my_instance_ip, $my_instance_port) = get_ip_port();
+  if ( $my_instance_ip ) {
+    if ( $my_instance_port ) {
+      append2inventory("DBINSTANCEIP", $my_instance_ip);
+      append2inventory("DBINSTANCEPORT", $my_instance_port);
+    }
+  }
+
+  append2inventory("ORACLEHOST", $my_hostname);
+  append2inventory("DBHOST", $my_hostname);
+
+  $HtmlReport->add_heading(2, "General Info", "_default_");
+
+  # PDB info
+  my $aref;
+  if ($my_refresh_mode =~ /NONE/) {
+    $aref = [
+      "PDB name             ! $my_pdb_name"
+    , "Oracle Full Version  ! $ORACLE_VERSION"
+    , "PDB guid             ! $my_guid"
+    , "PDB DBID             ! $my_dbid"
+    , "PDB created          ! $my_created"
+    , "PDB startup at       ! $my_open_time"
+    , "PDB status           ! $my_status"
+    , "Force Logging        ! $my_force_log"
+    , "Refresh mode         ! $my_refresh_mode"
+    , "CDB instance name    ! $my_cdb_name"
+    , "Running on host      ! $my_hostname"
+    ];
+  } else {
+    # Refresh Mode is not NONE => is active
+
+    $aref = [
+      "PDB name             ! $my_pdb_name"
+    , "Oracle Full Version  ! $ORACLE_VERSION"
+    , "PDB guid             ! $my_guid"
+    , "PDB DBID             ! $my_dbid"
+    , "PDB created          ! $my_created"
+    , "PDB startup at       ! $my_open_time"
+    , "PDB status           ! $my_status"
+    , "Force Logging        ! $my_force_log"
+    , "Refresh mode         ! $my_refresh_mode"
+    , "Refresh interval     ! $my_refresh_int"
+    , "CDB instance name    ! $my_cdb_name"
+    , "Running on host      ! $my_hostname"
+    ];
+  }
+
+  $HtmlReport->add_table($aref, "!", "LL", 0);
+
+  $HtmlReport->add_goto_top("top");
+
+  # ------
+  # Options pack usage
+
+  # Complete output for Oracle 19+
+  # (Not sure if it works for Oracle 18)
+  if ( oracle_3d_version(4) ge "019.000.000.000" ) {
+    options_packs_usage_statistics19();
+  }
+
+
+  # -----
+  # Additional patch information from registry$history
+
+  # Although this normally shows the same results as for the CDB, 
+  # the patches are normally applied a bit later for the pdbs.
+
+  if ($ORACLE_DBSTATUS eq "OPEN") {
+    $sql = "
+      select
+          to_char(action_time, 'YYYY-MM-DD HH24:MI:SS')
+        , action
+        , namespace
+        , version
+        , bundle_series
+        , comments
+      from registry\$history
+      order by 1
+      ;
+
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    # prepend a title line
+    unshift(@L, "timestamp  $DELIM  action  $DELIM  namespace  $DELIM  version $DELIM bundle_series $DELIM comments ");
+
+    $HtmlReport->add_heading(2, "Registry History", "_default_");
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
+    $HtmlReport->add_paragraph('p', "The 'version' often contains expressions like: 19.8.0.0.200714OJVMRU where 200714 is the date of the patch: 2020-07-14.");
+    $HtmlReport->add_goto_top("top");
+  } else {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+  }
+
+  return(1);
+
+} # part_1_pdb
+
+
+# -------------------------------------------------------------------
+sub part_2_pdb {
+  # Parameters,  NLS settings
+
+  title(sub_name());
+
+  my @L = ();
+  my $txt = "";
+  my $sql = "";
+
+  # -----
+  # Parameters
+
+  # my $sql = "
+  #   select rtrim(name)
+  #   , rtrim(value)
+  #   , rtrim(isdefault)
+  #   from v\$parameter
+  #   order by name;
+  # ";
+
+  $sql = "
+    select 
+      name
+    , display_value
+    , ismodified
+    , isdefault
+    , DESCRIPTION
+    from V\$SYSTEM_PARAMETER2
+    where con_id = $CURRENT_CON_ID
+    order by name;
+  ";
+
+
+  if (! do_sql($sql)) {return(0)}
+
+  @L = ();
+  get_value_lines(\@L, $TMPOUT1);
+
+  unshift(@L, "parameter  $DELIM  value $DELIM  is modified $DELIM is default $DELIM  description");
+
+  $HtmlReport->add_heading(2, "Parameters", "_default_");
+  # if ( oracle_3d_version(2) eq "012.002" ) {
+  #   $HtmlReport->add_paragraph('p', "In Oracle 12.2 there may be some underscore parameters added because the STATISTICS_LEVEL was changed. This is expected behavior, see: When Changing STATISTICS_LEVEL Parameter On 12.2.0.1, Few Extra Parameters Are Also Added To Spfile (Doc ID 2282692.1)");
+  # }
+  $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
+  $HtmlReport->add_goto_top("top");
+
+
+  # -----
+  # database and instance NLS parameters
+
+  # At least the instance NLS parameters seem to be modifiable in PDBs.
+  # So show them (all).
+
+  if ($ORACLE_DBSTATUS eq "OPEN") {
+
+    # Use concatenation to avoid the substitution question
+    $sql = "
+      SELECT
+         db.parameter as parameter,
+         nvl(db.value, '&' || 'nbsp;') as database_value,
+         nvl(i.value, '&' || 'nbsp;') as instance_value
+      FROM nls_database_parameters db
+      LEFT JOIN nls_instance_parameters i ON i.parameter = db.parameter
+      ORDER BY parameter;
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    # Insert title
+    unshift(@L, "NLS PARAMETER  $DELIM  NLS_DATABASE_PARAMETERS   $DELIM   NLS_INSTANCE_PARAMETERS");
+
+    $HtmlReport->add_heading(2, "NLS Database and Instance Parameters", "_default_");
+    $HtmlReport->add_paragraph('p', "NLS_DATABASE_PARAMETERS show the initially defined values of the NLS parameters for the database. These are fixed at the database level and cannot be changed, some can be overridden by NLS_INSTANCE_PARAMETERS. NLS_CHARACTERSET and NLS_NCHAR_CHARACTERSET can NOT be changed, though!");
+    $HtmlReport->add_paragraph('p', "NLS_INSTANCE_PARAMETERS show the current NLS instance parameters that have been explicitly set to override the invariable NLS_DATABASE_PARAMETERS. This is the base from which the NLS_SESSION_PARAMETRS are derived (the effective parameters for the user session). Note that enviroment variables like NLS_LANG which can be effective in a user session do overwrite the NLS_INSTANCE_PARAMETERS.");
+    $HtmlReport->add_table(\@L, $DELIM, "LLL", 1);
+    $HtmlReport->add_goto_top("top");
+  } else {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+  }
+
+} # part_2_pdb
+
+
+# -------------------------------------------------------------------
+sub security_settings_pdbs {
+  # Security Settings
+
+  title(sub_name());
+
+  $HtmlReport->add_heading(2, "Security Settings", "_default_");
+  $HtmlReport->add_heading(3, "Unified Auditing", "_default_");
+
+  if ( $ORA_MAJOR_RELNO < 19 ) {
+    $HtmlReport->add_paragraph('p', "This section is only supported for Oracle 19 (and later).");
+    $HtmlReport->add_goto_top("top");
+
+    print sub_name() . ": is only supported for Oracle 19 and later\n";
+    return(0);
+  }
+
+  my @L = ();
+  my $txt = "";
+  my $sql = "";
+
+  # -----
+  # Check for UNIFIED AUDITING
+
+  $sql = "
+    select 'unified_auditing', upper(value)
+    from v\$option
+    where lower(parameter) = 'unified auditing';
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $V = trim(get_value($TMPOUT1, $DELIM, "unified_auditing"));
+  print "Unified Auditing=$V\n";
+
+  if ($V !~ /TRUE/i ) {
+    $HtmlReport->add_paragraph('p', "Unified Auditing is not enabled.");
+    $HtmlReport->add_goto_top("top");
+    return(1);
+  }
+  $HtmlReport->add_paragraph('p', "Unified Auditing is enabled.");
+
+  $HtmlReport->add_paragraph('p', "Keep in mind that the following initialization parametes have NO EFFECT when unified auditing is enabled: AUDIT_TRAIL, AUDIT_FILE_DEST, AUDIT_SYS_OPERATIONS and AUDIT_SYSLOG_LEVEL.");
+
+  # -----
+  # Get enabled Auditing Policies
+
+  if ($ORACLE_DBSTATUS eq "OPEN") {
+
+    # Oracle 19 only, older versions are not supported
+
+    $sql = "
+      select
+        POLICY_NAME, ENABLED_OPTION, ENTITY_NAME, ENTITY_TYPE, SUCCESS, FAILURE
+      FROM AUDIT_UNIFIED_ENABLED_POLICIES
+      order by 1;
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    unshift(@L, "POLICY_NAME  $DELIM ENABLED_OPTION $DELIM  ENTITY_NAME  $DELIM  ENTITY_TYPE  $DELIM  SUCCESS  $DELIM  FAILURE");
+
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
+
+    # -----
+    # Check if there are policies listed more than once.
+    # That indicates (AFAIK currently) inherited policies from the cdb. 
+    # (tested on Oracle 19.9)
+
+    $sql = "
+      select POLICY_NAME  FROM AUDIT_UNIFIED_ENABLED_POLICIES 
+      group by POLICY_NAME 
+      having count(POLICY_NAME) > 1;
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+    @L = ();
+    get_value_lines(\@L, $TMPOUT1);
+
+    my $in_clause = "";
+
+    foreach my $polname (@L) {
+      my @E = split($DELIM, $polname);
+      @E = map(trim($_), @E);
+
+      if ($in_clause) { $in_clause .= "," }
+      $in_clause .= "'$E[0]'";
+    }
+
+    if ($in_clause) {
+      # That select does not contain all columns, 
+      # further inspection may be necessary.
+      # This is just for informational purposes.
+
+      $sql = "
+        select POLICY_NAME           
+        , AUDIT_OPTION          
+        , AUDIT_OPTION_TYPE     
+        , COMMON                
+        , INHERITED             
+        , AUDIT_ONLY_TOPLEVEL   
+        from audit_unified_policies 
+        WHERE  policy_name IN ($in_clause)
+          AND inherited = 'YES'
+        ORDER BY 1,2,3,4,5,6;
+      ";
+
+      if (! do_sql($sql)) {return(0)}
+
+      @L = ();
+      get_value_lines(\@L, $TMPOUT1);
+
+      $HtmlReport->add_heading(4, "Inherited Audit Policies", "_default_");
+
+      $HtmlReport->add_paragraph('p', "(Inherited from the CDB)");
+
+      unshift(@L, "POLICY_NAME  $DELIM AUDIT_OPTION $DELIM  AUDIT_OPTION_TYPE  $DELIM  COMMON  $DELIM  INHERITED  $DELIM  AUDIT_ONLY_TOPLEVEL");
+
+      $HtmlReport->add_table(\@L, $DELIM, "LLLLLL", 1);
+
+      $HtmlReport->add_paragraph('p', "This table does not contain all columns, further inspection of table AUDIT_UNIFIED_POLICIES may be necessary.");
+
+    # } else {
+    #   print "No inherited audit policies found.\n";
+    }
+
+    $HtmlReport->add_goto_top("top");
+
+  } else {
+
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+
+  }
+
+  return(0);
+
+} # security_settings_pdbs
+
+
+
+# ===================================================================
+# -------------------------------------------------------------------
 sub send2uls {
   # send2uls(<filename>);
   #
@@ -2681,6 +3516,9 @@ sub send2uls {
 
   my $uls_detail = "Oracle Database Information Report";
   my $alias_filename = "ora_dbinfo_${MY_HOST}_$ENV{'ORACLE_SID'}.html";
+  if ( $CURRENT_PDB ) {
+    $alias_filename = "ora_dbinfo_${MY_HOST}_$ENV{'ORACLE_SID'}_" . lc($CURRENT_PDB) . ".html";
+  }
   my $compress = "none";
 
   # compress the file, if possible
@@ -2688,7 +3526,7 @@ sub send2uls {
   if ( $CFG{"ORA_DBINFO.GZIP_THE_REPORT"} ) { $compress = "gzip" }
   if ( $CFG{"ORA_DBINFO.XZ_THE_REPORT"}   ) { $compress = "xz" }
 
-  my $new_filename = $HtmlReport->save2file($filename, $compress);
+  my $new_filename = $HtmlReport->save2file($filename, $compress, 'FORCE');
   if (! $new_filename ) {
     output_error_message(sub_name() . ": Error: Cannot process file '$filename' correctly!");
     return(undef);
@@ -2707,8 +3545,13 @@ sub send2uls {
   if ($CFG{"ORA_DBINFO.AS_SERVER_DOC"} ) {
     # Send the report as server documentation.
     # The name must contain the SID to distinguish the instances.
+    my $server_doc_name = "${IDENTIFIER}_$ENV{'ORACLE_SID'}";
+    if ( $CURRENT_PDB ) {
+      $server_doc_name = "${IDENTIFIER}_$ENV{'ORACLE_SID'}_" . lc($CURRENT_PDB);
+    }
+
     uls_server_doc({
-        name        => "${IDENTIFIER}_$ENV{'ORACLE_SID'}"
+        name        => $server_doc_name
       , description => $uls_detail
       , filename    => $new_filename
       , rename_to   => $alias_filename
@@ -2800,12 +3643,22 @@ sub sendinventory2uls {
   my $orasid = lc($ENV{"ORACLE_SID"});
 
   # Send the inventory as server documentation
+
+  my $server_doc_name = "Inventory-Database-Oracle-$orasid";
+  my $rename_to       = "Inventory-Database-Oracle-$MY_HOST-$orasid.csv";
+
+  if ( $CURRENT_PDB ) {
+    my $orapdb = lc($CURRENT_PDB);
+    $server_doc_name = "Inventory-Database-Oracle-$orasid-$orapdb";
+    $rename_to       = "Inventory-Database-Oracle-$MY_HOST-$orasid-$orapdb.csv";
+  }
+
   uls_server_doc({
       hostname    => $MY_HOST
-    , name        => "Inventory-Database-Oracle-$orasid"
+    , name        => $server_doc_name
     , description => $description
     , filename    => $filename
-    , rename_to   => "Inventory-Database-Oracle-$orasid-$MY_HOST.csv"
+    , rename_to   => $rename_to
   });
   #                  "Inventory-Database-" 
   #                  is the agreement for all database inventory files
@@ -3025,6 +3878,13 @@ uls_timing({
 # Send the ULS data up to now to have that for sure.
 uls_flush(\%ULS);
 
+
+# Temporary variable to hold the ULS section, 
+# will be changed for the PDBs (if any), 
+# and set back to default for the final ULS values
+# before exiting the script.
+my $uls_section = $CFG{"ULS.ULS_SECTION"} ;
+
 # -----
 # Define some temporary file names
 $TMPOUT1 = "${WORKFILEPREFIX}_1.tmp";
@@ -3056,6 +3916,11 @@ $SQLPLUS_COMMAND = $CFG{"ORACLE.SQLPLUS_COMMAND"} || $SQLPLUS_COMMAND;
 # De-reference the return value to the complete hash.
 %TESTSTEP_DOC = %{doc2hash(\*DATA)};
 
+# -----
+# Perhaps, corporate settings are set up in the configuration file(s).
+
+my $css_style = $CFG{"ORA_DBINFO.CSS_STYLE"};
+if ( $css_style ) { $HtmlReport->set_style("$css_style") }
 
 # -------------------------------------------------------------------
 # The real work starts here.
@@ -3076,21 +3941,14 @@ if (! oracle_available() ) {
 
 part_1();
 
-# Check if Oracle version is supported by this script.
-if ( oracle_3d_version() < "010" ) {
-  output_error_message("$CURRPROG: Error: Oracle version $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO is too old, 10.1 at least => aborting script.");
-  end_script(1);
-}
-if ( oracle_3d_version() > "012.002.000.001" ) {
-  output_error_message("$CURRPROG: Error: Oracle version $ORA_MAJOR_RELNO.$ORA_MAINTENANCE_RELNO is too new, 12.2.0.1 is maximum => aborting script.");
-  end_script(1);
-}
-
-
-
 # -----
 # Parameters,  NLS settings
 part_2();
+
+# -----
+# Statistics preferences
+
+stat_prefs ();
 
 # -----
 # Security Settings
@@ -3135,8 +3993,11 @@ part_10();
 # listener.ora, tnsnames.ora, sqlnet.ora
 part_11();
 
+
 # -----
 # Continue here with more tests.
+
+
 
 # The real work ends here.
 # -------------------------------------------------------------------
@@ -3149,6 +4010,127 @@ sendinventory2uls($TMPOUT2);
 
 # -------------------------------------------------------------------
 send_doc($CURRPROG, $IDENTIFIER);
+
+
+
+
+# ==================================================================
+# CDB/PDB
+
+if ($#PDB_LIST >= 0) {
+  # Remember: $#ARRAY returns the max index of the array, which starts at zero!
+
+  print "List of PDBs and CON_IDs: ", join(",", @PDB_LIST), "\n";
+
+  # -----
+  # Keep that, add pdb name for each pdb in loop below
+  my $base_WORKFILEPREFIX = $WORKFILEPREFIX;
+
+  foreach my $p (@PDB_LIST ) {
+    # pdb_name|con_id
+
+    ($CURRENT_PDB, $CURRENT_CON_ID) = split('\|', $p);
+    # print "p=$p, CURRENT_PDB=$CURRENT_PDB, CURRENT_CON_ID=$CURRENT_CON_ID\n";
+    print "Gathering info for pluggable database '$CURRENT_PDB' (CON_ID: $CURRENT_CON_ID)\n";
+
+    my $pdb_lc = lc($CURRENT_PDB);
+
+    # -----
+    # Temporary variable to hold the ULS section 
+    # for the currently selected PDB.
+    $uls_section = $CFG{"ULS.ULS_SECTION_PDB"} ;
+    # (just set a default, if no entry is found in conf)
+    if ( ! $uls_section ) { $uls_section = "Oracle PDB [__PDB_NAME__]" }
+    #
+    # See the configuration file:
+    # vi /etc/oracle_optools/standard.conf
+    # ULS_SECTION_PDB = Oracle PDB [__PDB_NAME__]
+
+    # Replace placeholder with PDB name
+    $uls_section =~ s/__PDB_NAME__/$pdb_lc/g;
+
+    print "Setting ULS_SECTION to: $uls_section\n";
+
+    set_uls_section($uls_section);
+
+    # -----
+    $WORKFILEPREFIX = $base_WORKFILEPREFIX . "_$pdb_lc";
+    print "WORKFILEPREFIX=$WORKFILEPREFIX\n";
+
+    $HTMLOUT1 = "${WORKFILEPREFIX}_1.html";
+    push(@TEMPFILES, $HTMLOUT1);
+    print "HTMLOUT1=$HTMLOUT1\n";
+
+    # -----
+    # This keeps the complete report for this pdb (as html)
+    # (reset the document)
+    $HtmlReport = HtmlDocument->new();
+
+    # Set the default css styles, see the appropriate section in the
+    # conf file to adjust the style to your taste.
+
+    $HtmlReport->set_style("
+      table {
+          border-collapse: collapse;
+          border: 1px solid darkgrey;
+          margin-top: 5px;
+      }
+      th, td {
+          border: 1px solid darkgrey;
+          padding: 5px;
+      }
+      th { background-color: #dbe4f0; }
+      pre  {background-color: whitesmoke; }
+    ");
+
+    $css_style = $CFG{"ORA_DBINFO.CSS_STYLE"};
+    if ( $css_style ) { $HtmlReport->set_style("$css_style") }
+
+    $INVENTORY = "";
+
+    part_1_pdb();
+
+    # Parameters, NLS settings
+    part_2_pdb();
+
+    # Audit policies
+    security_settings_pdbs();
+
+    # Tablespaces (default sql commands work)
+    part_8_11plus();
+
+
+
+    ## -----
+    ## Continue here with more pdb tests.
+
+
+    # The real work ends here.
+    # -------------------------------------------------------------------
+
+    send2uls($HTMLOUT1);
+    # print $REPORT, "\n";
+
+    sendinventory2uls($TMPOUT2);
+    # print "$INVENTORY\n";
+
+    # -------------------------------------------------------------------
+    send_doc($CURRPROG, $IDENTIFIER);
+
+
+  } # foreach pdb
+
+
+} # is_cdb, has pdbs
+
+
+# The real work ends here.
+# -------------------------------------------------------------------
+
+# The final message and runtime is only sent for the cdb.
+
+$uls_section = $CFG{"ULS.ULS_SECTION"} ;
+set_uls_section($uls_section);
 
 if ($MSG eq "OK") {end_script(0)}
 
@@ -3235,7 +4217,7 @@ Oracle Database Information Report:
 #   proper execution of this script.
 # 
 
-Copyright 2011 - 2017, roveda
+Copyright 2011 - 2021, roveda
 
 Oracle OpTools is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

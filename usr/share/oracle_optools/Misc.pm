@@ -7,7 +7,7 @@
 #   are generally used in (my) perl scripts.
 # 
 # ---------------------------------------------------------
-# Copyright 2004-2017, roveda
+# Copyright 2004 - 2020, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -192,6 +192,8 @@
 # 2017-07-06, 0.42, roveda:
 #   Added appendfile2file() and try_to_compress().
 #
+# 2020-08-16, 0.43, roveda:
+#   Added '--force' to compress commands in try_to_compress().
 #
 #
 # ============================================================
@@ -214,7 +216,7 @@ require Exporter;
 
 @EXPORT = qw(appendfile2file args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs local_tz_offset lockfile_build make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim try_to_compress tz);
 
-$VERSION = 0.42;
+$VERSION = 0.43;
 
 # This one is used as timestamp marker in work files.
 my $TIMESTAMP_TXT = "T_I_M_E_S_T_A_M_P";
@@ -274,13 +276,13 @@ sub try_to_compress {
   # Tries to compress the given file by checking
   # the presence of: xz, bzip2 and gzip.
   #
-  # It returns the new extension or "" if no .
+  # It returns the new extension or "" if neither command worked successfully.
 
   my ($filename) = @_;
 
-  if (exec_os_command("xz $filename")) { return(".xz") }
-  if (exec_os_command("bzip2 $filename")) { return(".bz2") }
-  if (exec_os_command("gzip $filename")) { return(".gz") }
+  if (exec_os_command("xz --force $filename")) { return(".xz") }
+  if (exec_os_command("bzip2 --force $filename")) { return(".bz2") }
+  if (exec_os_command("gzip --force $filename")) { return(".gz") }
   return("");
 
 } # try_to_compress

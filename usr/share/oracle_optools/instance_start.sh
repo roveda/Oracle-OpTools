@@ -29,12 +29,12 @@
 # Description:
 #   Script to start an Oracle database instance.
 #
-#   <oracle_environment_script>:
+#   <oracle_environment_script>: 
 #       the full path of the script to set the
 #       environment variables for Oracle, like ORACLE_HOME and ORACLE_SID
 #
 #   <listener_name>:
-#      The name of the listener to be startied.
+#      The name of the listener to be started.
 #   DEFAULT:
 #      Start the default listener.
 #
@@ -139,7 +139,7 @@ case $UC_LISTENER_NAME in
     echo "No listener is started!"
     ;;
   DEFAULT)
-    # If 'DEFAULT' has been given as listener name,
+    # If 'DEFAULT' has been given as listener name, 
     # start the listener with default listener name
 
     echo "Starting the default listener"

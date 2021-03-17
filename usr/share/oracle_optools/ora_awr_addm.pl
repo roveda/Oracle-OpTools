@@ -3,7 +3,7 @@
 #   ora_awr_addm.pl - create AWR and ADDM reports for time intervals
 #
 # ---------------------------------------------------------
-# Copyright 2009 - 2017, roveda
+# Copyright 2009 - 2019, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -107,6 +107,9 @@
 #   Now creating an error message file which is compressed and sent 
 #   to ULS in case of an error during script execution.
 #
+# 2019-07-13      roveda      0.16
+#   No execution and no error when running as physical standby.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -121,10 +124,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.41;
+use Misc 0.42;
 use Uls2 1.16;
 
-my $VERSION = 0.15;
+my $VERSION = 0.16;
 
 # ===================================================================
 # The "global" variables
@@ -561,14 +564,33 @@ sub general_info {
   my $ts = "Info";
 
   # ----- Check if Oracle is available
-  my $sql = "select 'database status', status from v\$instance;";
+  my $sql = "
+    select 'database status', status from v\$instance;
+    SELECT 'database role', DATABASE_ROLE FROM V\$DATABASE;
+  ";
+
+  my $db_status = "";
+  my $db_role   = "";
 
   if (exec_sql($sql)) {
 
     if (! errors_in_file($TMPOUT1)) {
 
-      my $V = trim(get_value($TMPOUT1, $DELIM, "database status"));
-      if ($V ne "OPEN") {return(0)}
+      $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
+      $db_role = trim(get_value($TMPOUT1, $DELIM, "database role"));
+
+      if ("$db_role, $db_status" eq "PRIMARY, OPEN" ) {
+        # role and status is ok, create AWR report
+        print "Database role $db_role and status $db_status is ok.\n";
+
+      } elsif ("$db_role, $db_status" eq "PHYSICAL STANDBY, MOUNTED") {
+        # role and status is ok, but no AWR report
+        return(2);
+
+      } else {
+        # role and status is NOT ok, no AWR report, error
+        return(0);
+      }
 
     } else {
 
@@ -1273,9 +1295,13 @@ print "ERROUTFILE=$ERROUTFILE\n";
 print "DELIM=$DELIM\n";
 
 # ----- general info ----
-if (! general_info()) {
+my $ret = general_info();
+if ($ret == 0) {
   output_error_message("$CURRPROG: Error: A fatal error has ocurred! Aborting script.");
   end_script(1);
+} elsif ($ret == 2) {
+  print "INFO: The database role and database status is not suitable for generating an AWR report.\n";
+  end_script(0);
 }
 
 generate_reports();
