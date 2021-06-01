@@ -1,415 +1,152 @@
-CHANGES
+%changelog
+* Sun May 30 2021 Roveda <roveda@universal-logging-system.org> 1.0-34
+2021-04-22: Added the corrcect exit value to the scripts.
+
+* Wed Mar 17 2021 Roveda <roveda@universal-logging-system.org> 1.0-33
+2021-05-17: Fixed the detection of CDB or not in ora_dbinfo.pl.
+
+* Fri Jan 08 2021 Roveda <roveda@universal-logging-system.org> 1.0-32
+2021-01-08: Revised and updated ooFunctions. 
+Any output when source'ing the environment script in get_role_status.sh is disregarded.
+
+* Wed Jan 06 2021 Roveda <roveda@universal-logging-system.org> 1.0-31
+2021-01-06: Correction of ora_dbinfo.pl for 12.1.0.1 usage.
+
+* Wed Nov 11 2020 Roveda <roveda@universal-logging-system.org> 1.0-30
+2020-11-03: ora_dbinfo.pl now fully supports multitenant databases.
+2020-11-11: Corrected ora_dbinfo.pl, a column does not exist in 12.1's dba_pdbs.
+
+* Fri Oct 30 2020 Roveda <roveda@universal-logging-system.org> 1.0-29
+2020-10-30: ora_dbinfo.pl supports pdbs in multitenant environments
+with a stripped report.
+
+* Fri Sep 25 2020 Roveda <roveda@universal-logging-system.org> 1.0-28
+2020-09-25: double declared variable fixed in ora_dbinfo.pl
+
+* Tue Sep 22 2020 Roveda <roveda@universal-logging-system.org> 1.0-27
+2020-09-22: Fixed ora_dbinfo.pl for Oracle 19 (table structure change)
+2020-08-16: Added '--force' to compress commands in Misc.pm
+2020-07-27: Added serveroutput to plsql sections.
+2020-07-14: Adding of nightly_performance_reports.sh to possibly existing crontab files
+for all environments (if entry is not present).
+
+* Fri Mar 20 2020 Roveda <roveda@universal-logging-system.org> 1.0-26
+2020-03-20: Added informational text in ora_dbinfo.pl for Oracle 12.2 parameter list.
+2020-03-05: standard.conf corrected and MAXPIECESIZE added as comment in 
+RMAN backup command sections.
+
+* Fri Nov 29 2019 Roveda <roveda@universal-logging-system.org> 1.0-25
+2019-11-29: Added REDOLOGS_STANDBY parameter in standard.conf
+
+* Mon Oct 14 2019 Roveda <roveda@universal-logging-system.org> 1.0-24
+2019-10-14: Added global optimizer statistic preferences to ora_dbinfo.pl
+
+* Thu Sep 19 2019 Roveda <roveda@universal-logging-system.org> 1.0-23
+2018-10-05: Added version check in ora_dbinfo and distinguish the output
+for the different versions in unified auditing.
+2019-03-12: Check existence of obsolete oracle_tools sub-directory before trying to tar it.
+2019-09-19: Added support for DataGuard environments for instance starting
+and stopping, and in all scripts. Some functions in ora_housekeeping cannot 
+be done, when the instance is in STANDBY.
+
+* Fri Sep 14 2018 Roveda <roveda@universal-logging-system.org> 1.0-22
+Added bigfile info about tablespaces in ora_dbinfo.pl.
+Added scripts for starting and stopping the ipprotd by SCCL.
+Changed the default retention time for archived redo log on the local machine
+from 3 days to 3 hours in /etc/oracle_optools/standard.conf.
+
+* Tue Jun 19 2018 Roveda <roveda@universal-logging-system.org> 1.0-21
+ora_dbinfo.pl now contains incarnation information.
+
+* Wed Apr 18 2018 Roveda <roveda@universal-logging-system.org> 1.0-20
+Introduced an extra script for nightly performance reports (AWR and Perfstat).
+Changed crontab_create.sh accordingly.
+
+* Wed Mar 14 2018 Roveda <roveda@universal-logging-system.org> 1.0-19
+Added preliminary chapter 'Security Settings' to ora_dbinfo.
+
+* Sun Mar 11 2018 Roveda <roveda@universal-logging-system.org> 1.0-18
+Debugged a missing END IF in ora_housekeeping.pl
+
+* Fri Mar 09 2018 Roveda <roveda@universal-logging-system.org> 1.0-17
+ora_housekeeping now has a dedicated parameter for how long to keep the 
+unified auditing entries. 
+
+* Wed Feb 14 2018 Roveda <roveda@universal-logging-system.org> 1.0-16
+Changed the checks for successful sourcing the environment in every shell script
+to [[ -z "$ORACLE_SID" ]] instead of [ $? -ne 0 ] (what does not work).
+Requirement of sccl2 removed, these scripts can be used without sccl2.
+
+* Wed Jan 03 2018 Roveda <roveda@universal-logging-system.org> 1.0-15
+Added support for unified auditing in ora_housekeeping.pl.
+Do not remove the whole oracle_tools directory, insert a proxy script
+to call the start-stop script of this rpm that replaces the previous one.
+
+* Mon Oct 30 2017 Roveda <roveda@universal-logging-system.org> 1.0-14
+Corrected the check for proper parameters in crontab_create.sh
+Added ora_awr_addm.sh and ora_dbinfo.sh for convenience.
+
+* Thu Oct 19 2017 Roveda <roveda@universal-logging-system.org> 1.0-13
+Changed the find to omit environment scripts that have an extension (like a datetimestamp or .old).
+
+* Fri Sep 29 2017 Roveda <roveda@universal-logging-system.org> 1.0-12
+The package threw an error when no environment scripts already existed.
+Finding of environment scripts changed to 'find' instead of direct globbing.
+
+* Tue Sep 19 2017 Roveda <roveda@universal-logging-system.org> 1.0-11
+Debugged the usage of the options_packs_usage_statistics.sql, it was not executed 
+if it was used for the very first time (and ever after).
+
+* Tue Sep 06 2017 Roveda <roveda@universal-logging-system.org> 1.0-10
+tar and remove the old oracle_tools directory to avoid confusion and mix-up with new rpm.
+
+* Thu Aug 18 2017 Roveda <roveda@universal-logging-system.org> 1.0-9
+Changed ora_dbinfo to use the sql script options_packs_usage_statistics.sql 
+supplied by Oracle support. Change all /etc/cron.d/oracle_optools_* files to 644.
+
+* Thu Jul 6 2017 Roveda <roveda@universal-logging-system.org> 1.0-8
+All scripts now create an error message file instead of sending the error messages 
+as many single string expressions. That allows better filtering of significant 
+text lines for notification messages.
+
+* Tue Jun 6 2017 Roveda <roveda@universal-logging-system.org> 1.0-7
+Added missing '>' in handling of custom nightly scripts.
+Now requiring package sccl2 in version greater than 2.3 for installation.
+
+* Tue Mar 21 2017 Roveda <roveda@universal-logging-system.org> 1.0-6
+Fixed the broken support of sid specific configuration file in all perl scripts.
+Changed time of housekeeping in crontag from 22:00 to 03:00.
+
+* Mon Mar 20 2017 Roveda <roveda@universal-logging-system.org> 1.0-5
+Fixed ora_housekeeping.pl
+Fixed the processing of _custom scripts.
+Fixed the double transmission of the script and version to ULS in ora_statspack.pl.
+
+* Wed Feb 22 2017 Roveda <roveda@universal-logging-system.org> 1.0-4
+Changed standard.conf to new xxxx_IDENTIFIER in [ORARMAN].
+Changed orarman.pl to support the new identifiers.
+Unit of parameter is changed to '[#]'.
+Made ora_statspack silent, if no STATSPACK/PERFSTAT is set up.
+Reformatted the script headers.
+Added the hostname to the AWR report filename (now equal to the format of the ora_dbinfo report).
+Added a suggestion in this .spec for possibly existing _custom scripts in the old oracle_tools directory.
+Extended Uls2.pm for more verbose output in copy_files().
+
+* Tue Feb 07 2017 Roveda <roveda@universal-logging-system.org> 1.0-3
+Added a signal handler to all perl scripts. That is called e.g. if the
+server is shut down during a backup. The script will try to clean up and
+send all already collected ULS values to the ULS server.
+
+* Thu Feb 02 2017 Roveda <roveda@universal-logging-system.org> 1.0-2
+Environment script is now expanded (~oracle) before it is sourced.
+Yes, a check is made if the file exists before it is sourced, so no "rm -f /" is possible.
+Added support for old crontab files, fixed wrong handover of environment script, 
+temporarily disabled ipprotd scripts (will perhaps move to an own package).
+Changed inventory compilation in ora_dbinfo.pl, added ip address,
+added some parameters, added some text, added some css style.
+Changed default working directory to /var/tmp/oracle_optools/orcl for all scripts.
+Create the default working directory on installation.
+
+* Tue Jan 31 2017 Roveda <roveda@universal-logging-system.org> 1.0-1
+Initial package generation. Built from the oracle_tools.
 
-This file keeps the changes to the Oracle OpTools package.
-There is only a short information about the changes, but 
-it will point to the changed scripts.
-
-# -----
-2018-10-05, roveda
-  Added version check in ora_dbinfo and distinguish the output
-  for the different versions in unified auditing.
-
-2018-08-01, roveda
-  ora_dbinfo.pl: Added BIGFILE info for tablespaces
-  Added scripts to start and stop ipprotd as an SCCL package.
-
-2018-03-11, roveda
-  Missing END IF corrected in ora_housekeeping.pl.
-
-2018-03-08, roveda
-  Implemented workaround for empty cells in product and feature usage of ora_dbinfo.
-
-2018-02-15, roveda
-  Changed the deletion of unified audit entries in ora_housekeeping.pl
-
-2018-02-14, roveda
-  Changed the checks for successful sourcing the environment in every shell script 
-  to [[ -z "$ORACLE_SID" ]] instead of [ $? -ne 0 ] (what does not work).
-
-2017-12-28, roveda
-  Added support for unified auditing in ora_housekeeping.pl
-
-2017-10-30, roveda
-  Corrected the check for proper parameters in crontab_create.sh
-  Added ora_awr_addm.sh and ora_dbinfo.sh for convenience.
-  Second git commit for proper release.
-
-2017-09-19, roveda
-  Debugged the usage of the options_packs_usage_statistics.sql
-
-2017-09-06, roveda
-  tar and remove the old oracle_tools directory to avoid confusion and mix-up with new rpm.
-
-2017-08-18, roveda
-  Changed ora_dbinfo to use the sql script options_packs_usage_statistics.sql supplied by Oracle support.
-
-2017-06-19, roveda
-  ora_grants.pl: Ignoring temporary compression advisor tables when granting privilges.
-
-2017-06-01, roveda
-  Changed the header of crontab_create.sh
-
-2017-04-04, roveda
-  Merged the NLS parameters into one table in ora_dbinfo.pl.
-
-2017-03-20, roveda
-  Fixed ora_housekeeping.pl: the age in 'purge -age' must be minutes, 
-  now the number of days are recalculated to minutes.
-  Implemented workaround for Oracle bug concerning adr_base which is
-  NOT derived from diagnostic_dest but from a central file in ORACLE_HOME.
-  Therefore not correct if multiple instance are present on one server.
-  Fixed the broken support of sid specific configuration file in all perl scripts.
-
-2017-03-14, roveda
-  Fixed the double transmission of the script and version to ULS in ora_statspack.pl.
-
-2017-02-14, roveda
-  Changed "Versions" to new format.
-
-2017-02-07, roveda
-  Added a signal handler to all perl scripts. That is called e.g. if the  
-  server is shut down during a backup. The script will try to clean up and 
-  send all current ULS values to the ULS server.
-
-2017-02-01, roveda
-  Rewritten all scripts as preparation for building an rpm for some time.
-  Finally built rpm package oracle-optools.
-
-2017-01-11, roveda
-  Changed inventory composition in ora_dbinfo.pl, added ip address, 
-  added some parameters, added some text, added some style.
-
-2016-06-29, roveda
-  Changed crontab_create.sh
-
-2016-06-27, roveda
-  Changed crontab_create.sh
-
-2016-06-19, roveda
-  Changed HtmlDocument.pm, added a 'force' parameter to save2file().
-
-2016-06-15, roveda
-  Added the output of the ORA- lines to the message of the orarman script.
-  That allows faster identification of failure reasons.
-
-2016-06-14, roveda
-  Added the mode expression to the WORKFILEPREFIX for ora_statspack.pl
-  Coincidently running both SNAPSHOT and REPORT may lead to errors during execution, 
-  because workfilenames were the same. Temporary output was overwritten by
-  the second script.
-
-2016-06-09, roveda
-  Added the DBID to the inventory output in ora_dbinfo.pl
-
-2016-03-23, roveda
-  Changed orarman.pl: the used parameter (FULL, LEVEL0, REDOLOGS) is sent as detail(!) to ULS, 
-  a value of 0 indicates an error, a 1 success. 
-  That allows a math-based monitoring of backup execution over different levels.
-  The WORKFILEPREFIX is now instance(SID)-safe.
-
-2016-03-22, roveda
-  Made the get_config2() in Misc.pm safe to read files without any sections.
-  The perl scripts exited when trying to read the initially empty oracle_tools_SID.conf file.
-
-2016-03-21, roveda
-  Made the oracle_tools.conf read-only, because non-standard parameters should be 
-  defined in an oracle_tools_SID.conf file. That allows better and more reliable
-  automatic updates of the oracle_tools.
-
-2016-03-18, roveda
-  Changed the loop in backup_redologs
-  Changed the command to retrieve the hostname for default ULS_HOSTNAME in oracle_tools.conf
-
-2016-03-18, roveda
-  Changed all .pl to support a second, ORACLE_SID-specific configuration file.
-  That is the preparation for fully automatic updates of the oracle_tools:
-  All defaults are defined in oracle_tools.conf, if you need any other settings, 
-  you create an oracle_tools_$ORACLE_SID.conf file which ONLY contains the 
-  deviant sections and parameters (do not forget the section!).
-
-  Changed nightly to remove outdated .tmp files from oracle_tools directory.
-
-  oracle_tools_D_2016-03-18.zip packaged in d_oracle_inst
-
-2016-03-10, roveda
-  oracle_tools_D_2016-03-10.zip packaged in d_oracle_inst
-
-2016-02-24, roveda
-  Inserted LANG=C in all bash scripts.
-  Changed the output of ora_dbinfo to an HTML document.
-
-2016-02-11, roveda
-  Added ora_housekeeping to manage the audit entries, rotate the continuously growing logfiles (alert.log etc).
-
-2016-02-03, roveda
-  ora_dbinfo.pl: removed detailed feature usage from inventory.
-  backup_redologs: try a second execution if the first one fails.
-  oracle_tools_D_2016-02-03.zip shipped in d_oracle_inst-2.2.9.
-
-2016-02-01, roveda
-  ora_dbinfo.pl: Implemented the latest script from Oracle to collect usage statistics for licensable features (MOS Note 1317265.1)
-  oracle_tools_D_2016-02-02.zip shipped in d_oracle_inst-2.2.8.
-
-2015-12-14, roveda
-  Debugged the too long TAG in backup commands.
-  Changed the zip_it scripts.
-
-2015-12-02, roveda
-  Changed RMAN command for deleting archived redo logs in the oracle_tools.conf
-  Changed the new options_packs_usage_statistics.sql in ora_dbinfo.pl
-
-2015-10-05, roveda
-  oracle_tools_D_2015-10-05 packed for use in d_oracle_inst.
-
-2015-09-24, roveda
-  Re-worked the sql command for successful and failed logins in watch_oracle.pl.
-
-2015-09-20, roveda
-  Added information from registry$history to ora_dbinfo.
-  Added successful logins to watch_oracle.
-  Sending Networker server and pool to ULS in orarman.pl if present in environment.
-  oracle_tools_D_2015-09-23 shipped in d_oracle_inst-2.2.4.
-
-
-2015-04-29, roveda
-  oracle_tools_D_2015-04-29 shipped in d_oracle_inst-2.2.1.
-
-2015-04-27, roveda
-  Changed TEST_BEFORE_RUN: do not specify the complete path of the SCCL command
-  as that changes with SCCL2.
-
-2015-04-21, roveda
-  oracle_tools_D_2015-04-21 shipped in d_oracle_inst-2.2.0.
-
-2015-04-19, roveda
-  Backported ora_dbinfo to Oracle version 10, tablespace information did not work.
-
-2015-02-12, roveda
-  Debugged scheduler_details() in watch_oracle.pl
-  Added 'exit value' to all perl scripts, sends a '0' if "OK", else a '1'.
-  That is intended for combined limits such as: if more than two of the last 
-  three executions have failed, then send a notification.
-
-2015-01-29, roveda
-  oracle_tools_D_2015-01-29 shipped.
-
-2015-01-21, roveda
-  instance_start now starts the listener first, then the database. 
-  It should be registered at once.
-  Added the 'shutdown abort' command as remark in instance_stop, 
-  long running sql commands may deny a proper 'shutdowm immediate'.
-  Added a sample oracle_env_sample file.
-
-2015-01-09, roveda
-  Corrected ora_awr_addm.pl, added the local path for library search.
-  oracle_tools_D_2015-01-09 shipped.
-
-2015-01-08, roveda
-  Corrected the --silent option in crontab_create.sh
-
-  oracle_tools_D_2015-01-08 shipped.
-
-2015-01-07, roveda
-  Added the --silent option to crontab_create.sh. That suppresses all output. 
-  The general advices for following commands do probably not comply to the 
-  user's installation procedure, so make them optional.
-
-  oracle_tools_D_2015-01-07 shipped.
-
-2014-12-14, roveda
-  Got errors when using ora_grants on schemata which got synonyms on remote tables via a database link.
-  ORA-02021: DDL operations are not allowed on a remote database
-  Fixed that in ora_grants.pl, now these synonyms are skipped (they cannot be set).
- 
-2014-12-02, roveda
-  Corrected the URL to ipprot.
-
-2014-12-01, roveda
-  oracle_tools_D_2014-11-24 shipped.
-
-2014-11-18, roveda
-  Added a shell script to create the crontab for oracle instead of the fixed file.
-  It allows a randomly scattered execution of the backups of the redo logs and the database.
-  Check the script contents to change its behaviour.
-
-  All backslashes are converted to dots in sub audit_information() in watch_oracle.pl
-
-2014-11-11, roveda
-  Changed the sequence of "max processes" in watch_oracle.pl to avoid 
-  misleading notifications.
-
-2014-08-21, roveda
-  Added SPECIFIC_GRANTS to ora_grants.pl, any GRANT command can be executed.
-
-2014-07-18, roveda
-  ora_statspack now supports time intervals that contain a day change
-  (20:00 - 04:00, 08:00 - 08:00)
-
-2014-05-06, roveda
-   Now deriving the standard encoding for output files from environment variable LANG in Uls2.pm.
-
-2014-04-03, roveda
-  Changed the the output of the DBID in ora_dbinfo.pl
-
-2014-03-21, roveda:
-  Made send_ipprot executable. Changed some explaining text in oracle_tools.conf.
-
-2014-03-12, roveda:
-  No, changed the nightly script back to full and incremental backup.
-  You may chose your favorite backup metric.
-  The NSR environment variables must be set in the oracle_env_<sid> script,
-  rman should then work correctly. The replacement of the NSR variables 
-  in the oracle_tools.conf is removed.
-
-2014-02-10, roveda:
-  Added a FULL section for orarman and changed the nightly script 
-  to do a full backup every night (non-incremental).
-
-2014-01-18, roveda:
-  Added the ipprotd zip (for self compilation) in the customized version.
-  Changed instance_start, debugged the path of send_ipprot.
-  Debugged send_ipprot (did not work at all after change to oracle_tools.conf).
-  Uls2.pm now evaluates the configuration file of the latest ULS-Client for Linux correctly.
-  ora_statspack.pl debugged.
-
-2013-11-20, roveda
-  Added the RMAN_NSR_ENV to the oracle_tools.conf to be replaced by
-  the appropriate environment variable.
-
-2013-10-13, roveda
-  The Dataport customized zip now contains a README_D.txt which contains general information
-  and a small installation guide.
-
-2013-09-28, roveda
-  Recursive processing of replacements modified, it has now a limit of 100 [recusive] iterations.
-  A cron_oracle_tools is now added. The output of test_before_run.pl is redirected to /dev/null
-  because of output in Misc.pm during configuration file processing.
-  Added the call to ora_dbinfo in nightly.
-  Added the call of custom scripts in hourly and nightly only if they exist. These custom scripts
-  may be used for custom specific actions.
-
-2013-09-21, roveda
-  In the oracle_tools.conf placeholders like [[parameter]] can be used to be 
-  replaced by the contents of the parameter in double square brackets in the same section.
-  Recursive processing of replacements added.
-
-2013-08-25, roveda
-  Usage of configuration files has changed, now (normally) only one configuration file 
-  is necessary for all scripts. The shell scripts are not generated dynamically but 
-  delivered as working pattern.
-
-2013-06-23, roveda
-  Changed to non-SID-related script names, default directory for work files is 
-  <installation_directory>/var
-
-2013-04-20, roveda
-  Added statspack snapshots and reporting.
-  Regular scripts are now hourly_SID, nightly_SID and weekly_SID. All these are called via crontab entries.
-  orarman is divided in also hourly, nightly and weekly execution. 
-  That allows level zero and following incremental backups combined with hourly backups of archived redo logs.
-  Small changes to ora_dbinfo.
-
-2013-01-20, roveda
-  Added send_ipprot to make_scripts
-  Added inventory information in ora_dbinfo.pl
-  Finalized the translation to English for make_scripts.pl
-  Added ipprot to instance_start/stop.
-  Disabled temporarily the BUFFER_OBJECTS option in watch_oracle, 
-  the output is not correct if you have different buffers of different block sizes.
-
-2012-09-07, roveda
-  Changed ora_dbinfo.pl
-  Created ORACLE_TOOLS_2012-09-07.zip
-
-2012-08-30, roveda
-  Changed orabackup.pl and make_scripts.pl
-
-2012-08-23, roveda
-  Added inventory-oracle to ora_dbinfo.pl
-  Created ORACLE_TOOLS_2012-08-23.zip
-
-2012-04-27, roveda
-  Changed watch_oracle.pl.
-
-2011-12-21, roveda
-  Changed make_scripts.pl. Changed watch_oracle.pl (scheduler).
-  Rolled out VERSION_2011-12-21 (2012-01-13)
-
-2011-11-11, roveda
-  Added the GPL to every script and added the COPYING.txt that contains the GPL.
-  Changed ora_dbinfo.pl.
-
-2011-03-03, roveda
-  Debugged watch_oracle.pl, Finding shells now better in make_scripts.pl
-  Merged spin off developments to main line, loss of source code possible.
-  Main development machine is lxartpd5.
-
-2011-02-25, roveda
-  Changed watch_oracle.pl, make_scripts.pl
-
-2011-01-04, roveda
-  Changed make_scripts, debugged ora_dbinfo.pl
-
-2010-12-29, roveda
-  Added ora_dbinfo, changed make_scripts
-
-2010-12-22, roveda
-  Changed watch_oracle.pl, orarman.pl
-
-2010-09-27, roveda
-  Changed watch_oracle.pl, make_scripts.pl
-
-2010-09-24, roveda
-  Debugged make_scripts
-
-2010-09-20, roveda
-  Changed orarman.pl, make_scripts.pl
-  Rolled out.
-
-2010-03-26, roveda
-  Changed Uls2.pm: zip files automatically, if they are not zip, tgz, bz2, gz
-  Changed watch_oracle.pl, orarman.pl, make_scripts.pl
-
-2010-03-12, roveda
-  Changed orabackup.pl
-
-2010-03-04, roveda
-  Changed make_scripts.pl, orarman.pl
-
-2010-02-26, roveda
-  Changed watch_oracle.pl, make_scripts.pl, orarman.pl
-
-2010-02-17, roveda
-  Changed watch_oracle.pl
-
-2010-01-22, roveda
-  Changed Uls2.pm
-
-2010-01-14, roveda
-  Changed watch_oracle.pl, make_scripts.pl, Misc.pm
-
-2009-12-30, roveda
-  Debugged the removal of temporary pre-logfiles in all scripts.
-
-2009-12-20, roveda
-  Header of VERSION_* more verbose.
-  Changed make_scripts.pl
-
-2009-12-14, roveda
-  Minor changes in make_scripts.pl
-
-2009-12-01, roveda
-  Added ora_awr_addm. The instance* scripts are now generated
-  for each ORACLE_SID, the SCCL start-stop-script is new.
-
-2009-10-29, roveda
-  Added ora_grants.
-
-2009-07-08, roveda
-  Added PROCESSES for Oracle 10.2, HP-UX to instance_is_running
-  and remarked all PROCESSES. An error will be thrown, if neither
-  is un-remarked when using the script.
-
-2009-06-22, roveda
-  Removed zip_it from the ORACLE_TOOLS.zip.
-  Inserted the calculation of the cksum.

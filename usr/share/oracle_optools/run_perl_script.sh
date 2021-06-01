@@ -3,7 +3,7 @@
 # run_perl_script.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016 - 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -67,6 +67,10 @@
 # 2018-02-14      roveda      0.03
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
+#
+# 2021-04-22      roveda      0.04
+#   The exit value of the executed perl script is used as the exit value of this script.
+#   Added more NLS_ variables.
 #
 # ===================================================================
 
@@ -144,7 +148,7 @@ export HOSTNAME
 # Exit silently, if the TEST_BEFORE_RUN command does
 # not return the exit value 0.
 
-perl test_before_run.pl "$CONF" > /dev/null 2>&1 || exit
+perl test_before_run.pl "$CONF" > /dev/null 2>&1 || exit 2
 
 
 # -----
@@ -153,8 +157,12 @@ perl test_before_run.pl "$CONF" > /dev/null 2>&1 || exit
 # Set for decimal point, english messages and ISO date representation
 # (for this script execution only).
 # export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
-export NLS_LANG=AMERICAN_AMERICA.UTF8
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
 export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 perl "$SCRIPT" "$CONF" "$@" 
+
+exit $?
 

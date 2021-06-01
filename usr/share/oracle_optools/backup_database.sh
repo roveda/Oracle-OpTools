@@ -71,6 +71,9 @@
 #   if it is PRIMARY,OPEN. Do nothing for PHYSICAL STANDBY,MOUNTED.
 #   Give error for anything else.
 #
+# 2021-04-22      roveda      0.05
+#   Exit value of backup script is used as exit value of this script.
+#
 # ---------------------------------------------------------
 
 
@@ -161,4 +164,7 @@ esac
 # (or use the given second command line parameter as parameter)
 
 ./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf  $ROLEPARAMETER
+retval=$?
+
+exit $retval
 

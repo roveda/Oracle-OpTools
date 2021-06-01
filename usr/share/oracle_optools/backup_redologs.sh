@@ -64,6 +64,10 @@
 #   script to call. Currently supporting PRIMARY,OPEN and
 #   PHYSICAL STANDBY,MOUNTED. The standard.conf has also changed.
 #
+# 2021-04-22      roveda      0.04
+#   Exit value of redo log backup is used as exit value of this script.
+#
+#
 # ---------------------------------------------------------
 
 
@@ -117,12 +121,17 @@ while [ 1 ]; do
 
   # The parameter must match a parameter in the ORARMAN section in the configuration file!
   # Leave the loop, if successful.
-  # ./orarman.sh REDOLOGS  && break
-  ./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf $ROLEPARAMETER  && break
+  ./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf $ROLEPARAMETER
+  retval=$?
+  if [ $retval -eq 0 ] ; then
+    break
+  fi
 
   # Continue the loop if the script has failed, 
   # but bail out after the second try.
-  [ $C -ge 2 ] &&  break
+  if [ $C -ge 2 ] ; then
+    break
+  fi
 
   # Increment loop counter
   let C+=1
@@ -132,4 +141,5 @@ while [ 1 ]; do
 
 done
 
+exit $retval
 
