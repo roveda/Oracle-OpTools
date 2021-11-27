@@ -3,7 +3,7 @@
 # test_before_run.pl - Test, if any Oracle OpTools script is to be run or not
 #
 # ---------------------------------------------------------
-# Copyright 2013 - 2017, roveda
+# Copyright 2013 - 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -76,6 +76,10 @@
 #   Fixed the broken support of sid specific configuration file.
 #   Updated the version reference for Misc.pm.
 #
+# 2021-11-27      roveda      0.06
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
 #
 #    Change also $VERSION later in this script!
 #
@@ -84,13 +88,29 @@
 
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
+use Misc 0.44;
 
-my $VERSION = 0.05;
+my $VERSION = 0.06;
 
 # ===================================================================
 # The "global" variables

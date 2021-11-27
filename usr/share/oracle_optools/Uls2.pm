@@ -2,7 +2,7 @@
 # Uls2.pm  -  a perl module to generate value files to be processed by the ULS server
 #
 # ---------------------------------------------------------
-# Copyright 2004-2017, roveda
+# Copyright 2004-2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -162,6 +162,9 @@
 #   Added more verbose output to copy_files() for better debugging.
 #   Reference to Misc.pm version 0.40 updated.
 #
+# 2021-11-27, 1.17, roveda
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 #
 #
 # Change $VERSION later in the script!
@@ -170,6 +173,21 @@
 
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
 
 # Yes, I am
 package Uls2;
@@ -184,7 +202,7 @@ require Exporter;
 
 @EXPORT = qw(set_uls_hostname set_uls_section set_uls_timestamp uls_counter uls_doc uls_file uls_flush uls_get_last_values uls_image uls_init uls_nvalues uls_nvalues_nodup uls_nvalues_unique uls_send_file_contents uls_server_doc uls_show uls_settings uls_teststep_doc uls_timing uls_value uls_value_nodup uls_value_unique);
 
-$VERSION = 1.16;
+$VERSION = 1.17;
 
 # ----------------------------------------------------------------
 # Perl modules
@@ -194,7 +212,7 @@ use File::Copy;
 # ----------------------------------------------------------------
 # Miscellaneous module (self developped)
 use lib ".";
-use Misc 0.40;
+use Misc 0.44;
 
 # ----------------------------------------------------------------
 # Path where the operating system uls settings are found

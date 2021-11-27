@@ -1,4 +1,18 @@
 %changelog
+* Sat Nov 27 2021 Roveda <roveda@universal-logging-system.org> 1.0-37
+2021-11-27: Added full UTF-8 support to all perl scripts Umlaute should now be processed correctly
+in output to files sent to ULS.
+
+* Fri Oct 15 2021 Roveda <roveda@universal-logging-system.org> 1.0-36
+2021-10-15: added CSS_STYLE to the standard.conf
+2021-10-14: disabled the specifically formatted database inventory file in ora_dbinfo.pl
+
+* Thu Aug 12 2021 Roveda <roveda@universal-logging-system.org> 1.0-35
+2021-08-12: On installation, all oracle_* files are deleted from /etc/cron.d, but that 
+included probably other, not to this rpm related files. This step is now skipped.
+2021-06-03: ora_dbinfo.pl now includes a list of all defined services for the cdb and 
+all pdbs including IFILE referenced files.
+
 * Sun May 30 2021 Roveda <roveda@universal-logging-system.org> 1.0-34
 2021-04-22: Added the corrcect exit value to the scripts.
 

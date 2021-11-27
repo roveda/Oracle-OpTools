@@ -238,6 +238,19 @@
 #   Identifying if the database is a CDB fixed in part_1().
 #   It was constantly 'YES'.
 #
+# 2021-06-03      roveda      0.47
+#   Added a list of all defined services for the cdb or, if present, for all pdbs.
+#   If the tnsnames.ora file contains IFILE entries, then these referenced files 
+#   are also appended to the report.
+#
+# 2021-10-06      roveda      0.48
+#   Removed the transfer of inventory data to ULS (sendinventory2uls) as the used format 
+#   may not be useful for customer environments.
+#
+# 2021-11-27      roveda      0.49
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -246,16 +259,32 @@
 
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.43;
-use Uls2 1.16;
+use Misc 0.44;
+use Uls2 1.17;
 use HtmlDocument;
 
-my $VERSION = 0.46;
+my $VERSION = 0.49;
 
 # ===================================================================
 # The "global" variables
@@ -2933,13 +2962,14 @@ sub append_file_contents {
 } # append_file_contents
 
 
+
 # -------------------------------------------------------------------
 sub part_11 {
   # listener.ora, tnsnames.ora, sqlnet.ora
 
   title(sub_name());
 
-  my $txt = "";
+  ### my $txt = "";
 
   my $nw_admin = $ENV{"ORACLE_HOME"} . "/network/admin";
   if ($ENV{"TNS_ADMIN"} ) {
@@ -2964,7 +2994,115 @@ sub part_11 {
   $filename = $nw_admin . "/tnsnames.ora";
   append_file_contents($filename);
 
+  # -----
+  # Check for IFILE entries in tnsnames.ora
+  # and append the contents of those.
+
+  print "Check '$filename' for IFILE entries\n";
+
+  if (! open(TNSNAMES, "<", $filename)) {
+    output_error_message(sub_name() . ": Error: Cannot open '$filename' for reading. $!");
+    return(undef);
+  }
+
+  while (my $line = <TNSNAMES>) {
+    chomp($line);
+
+    if ($line =~ /^ *IFILE *= *(.*)$/i){
+       print "Found line containing IFILE: $line\n";
+       print "Extracted filename: [$1]\n";
+
+       append_file_contents("$1");
+    }
+  } # while
+
+  if (! close(TNSNAMES)) {
+    output_error_message(sub_name() . ": Error: Cannot close file handler for file '$filename'. $!");
+    return(undef);
+  }
+
+
 } # part_11
+
+
+
+
+# -------------------------------------------------------------------
+sub services {
+  title(sub_name());
+
+  my $version_3d = oracle_3d_version(4);
+  print "Oracle Version: $version_3d\n";
+
+  # -----
+  if ($version_3d ge "012.001.000.002") {
+    print "Print a list of defined services.\n";
+  } else {
+    print "Services are not listed for Oracle versions lower than 12.1.0.2\n";
+  }
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_heading(2, "Services", "_default_");
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
+    $HtmlReport->add_goto_top("top");
+    return(0);
+  }
+
+
+  # For all versions, CDB
+  # 
+  # SELECT PDB, NAME, NETWORK_NAME FROM CDB_SERVICES ORDER BY PDB, NAME;
+  # 
+  # PDB        NAME                           NETWORK_NAME
+  # ---------- ------------------------------ ------------------------------
+  # CDB$ROOT   SYS$BACKGROUND
+  # CDB$ROOT   SYS$USERS
+  # CDB$ROOT   dcdb19                         dcdb19
+  # CDB$ROOT   dcdb19XDB                      dcdb19XDB
+  # PBDMOTO001 PBDMOTO001                     PBDMOTO001
+  # PBDMOTO001 S-RV.NEU20                     s-rv.neu20
+  # PBDMOTO001 SERVICE1                       SERVICE1
+
+  # For all versions, PDB:
+  # 
+  # alter session set container=PBDMOTO001;
+  # 
+  # SELECT PDB, NAME, NETWORK_NAME FROM DBA_SERVICES ORDER BY PDB, NAME;
+  # 
+  # PDB        NAME                           NETWORK_NAME
+  # ---------- ------------------------------ ------------------------------
+  # PBDMOTO001 PBDMOTO001                     PBDMOTO001
+  # PBDMOTO001 S-RV.NEU20                     s-rv.neu20
+  # PBDMOTO001 SERVICE1                       SERVICE1
+  # PBDMOTO001 SERVICE2                       SERVICE2
+  # PBDMOTO001 SERVICE3                       SERVICE3
+  # PBDMOTO001 SRV.NEU20                      srv.neu20
+  # 
+
+  my $tblname = "CDB_SERVICES";
+  my $where   = "WHERE PDB IS NOT NULL";
+  if ($CURRENT_PDB) {
+    # sub is called for a PDB
+    $tblname = "DBA_SERVICES"; 
+    $where   = "";
+  }
+
+  my $sql = " SELECT PDB, NAME, NETWORK_NAME FROM $tblname $where ORDER BY PDB, NAME; ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my @A = ();
+  get_value_lines(\@A, $TMPOUT1);
+
+  # Insert title
+  unshift(@A, "container/pdb $DELIM service name $DELIM network name");
+
+  $HtmlReport->add_heading(2, "Services", "_default_");
+  $HtmlReport->add_table(\@A, $DELIM, "LLL", 1);
+  $HtmlReport->add_paragraph('p', "Services are usable via the 'network name'."); 
+  $HtmlReport->add_goto_top("top");
+
+} # services
 
 
 # -------------------------------------------------------------------
@@ -3990,6 +4128,11 @@ part_10();
 
 
 # -----
+# services
+
+services();
+
+# -----
 # listener.ora, tnsnames.ora, sqlnet.ora
 part_11();
 
@@ -4005,7 +4148,9 @@ part_11();
 send2uls($HTMLOUT1);
 # print $REPORT, "\n";
 
-sendinventory2uls($TMPOUT2);
+# -----
+# 2021-01-06: This is disabled as from version 0.48 on
+# sendinventory2uls($TMPOUT2);
 # print "$INVENTORY\n";
 
 # -------------------------------------------------------------------
@@ -4099,6 +4244,8 @@ if ($#PDB_LIST >= 0) {
     # Tablespaces (default sql commands work)
     part_8_11plus();
 
+    # PDB specific services
+    services();
 
 
     ## -----
@@ -4111,7 +4258,8 @@ if ($#PDB_LIST >= 0) {
     send2uls($HTMLOUT1);
     # print $REPORT, "\n";
 
-    sendinventory2uls($TMPOUT2);
+    # 2021-01-06: This is disabled as from version 0.48 on
+    # sendinventory2uls($TMPOUT2);
     # print "$INVENTORY\n";
 
     # -------------------------------------------------------------------

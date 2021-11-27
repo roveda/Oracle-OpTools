@@ -3,7 +3,7 @@
 # orabackup.pl - does an old-style online backup of an Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2004-2017, roveda
+# Copyright 2004-2021, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -175,24 +175,43 @@
 # 2017-03-21      roveda      0.31 
 #   Fixed the broken support of sid specific configuration file.
 #
+# 2021-11-27      roveda      0.32
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+# 
 #
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
 
 
-use 5.8.0;
+# use 5.8.0;
 use strict;
 use warnings;
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 use File::Copy;
 
 # These are ULS-modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.44;
+use Uls2 1.17;
 
-my $VERSION = 0.31;
+my $VERSION = 0.32;
 
 # ===================================================================
 # The "global" variables

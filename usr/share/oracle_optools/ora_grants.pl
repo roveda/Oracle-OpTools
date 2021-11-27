@@ -119,24 +119,44 @@
 #   set additionally in each section of the configuration file.
 #   Updated the module versions as of today.
 #
+# 2021-11-27      roveda      0.18
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
 #
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
 
 
-use 5.003_07;
+# use 5.003_07;
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 use File::Copy;
 
 # These are ULS-module:
 use lib ".";
-use Misc 0.43;
-use Uls2 1.16;
+use Misc 0.44;
+use Uls2 1.17;
 
-my $VERSION = 0.17;
+my $VERSION = 0.18;
 
 # ===================================================================
 # The "global" variables

@@ -3,7 +3,7 @@
 # ora_statspack.pl - make STATSPACK snapshots and generate reports
 #
 # ---------------------------------------------------------
-# Copyright 2013 - 2019, roveda
+# Copyright 2013 - 2021, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -116,6 +116,10 @@
 # 2019-07-13      roveda      0.14
 #   No execution and no error when running as physical standby.
 #
+# 2021-11-27      roveda      0.15
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -124,15 +128,31 @@
 
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.42;
-use Uls2 1.16;
+use Misc 0.44;
+use Uls2 1.17;
 
-my $VERSION = 0.14;
+my $VERSION = 0.15;
 
 # ===================================================================
 # The "global" variables

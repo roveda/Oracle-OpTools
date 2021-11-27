@@ -42,7 +42,7 @@
 #   arbitrary html using the add_html() method.
 #
 # ---------------------------------------------------------
-# Copyright 2016, roveda
+# Copyright 2016, 2021, roveda
 #
 # HtmlDocument.pm is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -86,11 +86,28 @@
 #   Added set_style().
 # 2016-07-14, 0.04, roveda
 #   Added exec_os_command() to get rid of the dependency to Misc.pm
+# 2021-11-27, 0.05, roveda
+#   Added full UTF-8 support.
 #
 # ============================================================
 
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
 
 # Yes, I am
 package HtmlDocument;
@@ -101,7 +118,7 @@ package HtmlDocument;
 
 # @EXPORT = qw(html_embody html_h html_link html_place_anchor_list html_set_anchor html_table html_text);
 
-my $VERSION = 0.04;
+my $VERSION = 0.05;
 
 
 # ------------------------------------------------------------

@@ -7,7 +7,7 @@
 #   are generally used in (my) perl scripts.
 # 
 # ---------------------------------------------------------
-# Copyright 2004 - 2020, roveda
+# Copyright 2004 - 2021, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -195,11 +195,30 @@
 # 2020-08-16, 0.43, roveda:
 #   Added '--force' to compress commands in try_to_compress().
 #
+# 2021-11-27, 0.44, roveda:
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
 #
 # ============================================================
 
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
 
 # Yes, I am
 package Misc;
@@ -216,7 +235,7 @@ require Exporter;
 
 @EXPORT = qw(appendfile2file args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs local_tz_offset lockfile_build make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim try_to_compress tz);
 
-$VERSION = 0.43;
+$VERSION = 0.44;
 
 # This one is used as timestamp marker in work files.
 my $TIMESTAMP_TXT = "T_I_M_E_S_T_A_M_P";
