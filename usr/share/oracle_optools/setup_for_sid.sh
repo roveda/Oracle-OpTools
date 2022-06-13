@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # setup_for_sid - Create all necessary files for a ORACLE_SID
 #
 # ---------------------------------------------------------
-# Copyright 2017 - 2018, roveda
+# Copyright 2017-2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -60,16 +60,24 @@
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2021-12-02      roveda      0.03
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8, use ooFunctions.
 #
 # -----------------------------------------------------------------------------
 
 unset LC_ALL
-export LANG=C
+export LANG=en_US.UTF-8
 
 USAGE="setup_for_sid.sh  <oracle_environment_script>"
 
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
+. ./ooFunctions
+
 if [ $EUID -ne 0 ]; then
-   echo "$0: ERROR: This script can only be run as root => ABORTING"
+   echoerr "$0: ERROR: This script can only be run as root => ABORTING"
    exit 1
 fi
 
@@ -77,8 +85,8 @@ fi
 # Check number of arguments
 
 if [[ $# -ne 1 ]] ; then
-  echo "ERROR: Wrong number of command line parameters => ABORTING"
-  echo "$USAGE"
+  echoerr "ERROR: Wrong number of command line parameters => ABORTING"
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -87,15 +95,13 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "ERROR: environment script '$ORAENV' not found => ABORTING"
+  echoerr "ERROR: environment script '$ORAENV' not found => ABORTING"
   exit 1
 fi
 
 . "$ORAENV"
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 1
 fi
 
@@ -130,7 +136,8 @@ echo
 echo
 echo "Creating crontab file for ${ORACLE_SID}"
 echo
-/usr/share/oracle_optools/crontab_create.sh ~oracle/oracle_env_${ORACLE_SID} /etc/cron.d
+# /usr/share/oracle_optools/crontab_create.sh ~oracle/oracle_env_${ORACLE_SID} /etc/cron.d
+$mydir/crontab_create.sh ~oracle/oracle_env_${ORACLE_SID} /etc/cron.d
 
 chmod 644 /etc/cron.d/oracle_optools_${ORACLE_SID}
 echo "Crontab file '/etc/cron.d/oracle_optools_${ORACLE_SID}' created."

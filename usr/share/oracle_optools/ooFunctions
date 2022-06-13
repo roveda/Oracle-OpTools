@@ -2,7 +2,7 @@
 # ooFunctions - A composition of useful bash functions
 #
 # ---------------------------------------------------------
-# Copyright 2019-2021, roveda
+# Copyright 2019, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -60,6 +60,11 @@
 #   Changed oracle_password() to latest version, 
 #   added error trapping in sql_value().
 #   Revised this header.
+#
+# 2021-12-02      roveda      0.04
+#   Added clesed_box(), infobox() and errorbox()
+#   Added oracle_version().
+#   Added parameter '-R 3' to sqlplus in sql_value() which will not read the [g]login.sql
 #
 # -------------------------------------------------------------------
 
@@ -146,6 +151,248 @@ show_warnings () {
 } # show_warnings
 
 
+# -------------------------------------------------------------------
+closedbox () {
+  # Hilfsfunktion, wird nicht direkt aufgerufen, siehe infobox() und errorbox()
+
+  # closedbox "rc" "Text" "Text" "Text"...
+  #
+  # "rc":
+  #      r: Zeichen fuer Zeile
+  #      c: Zeichen fuer Spalte (links/rechts)
+  #
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # : <message>                                :
+  # : <long message containng many characters> :
+  # : <short message>                          :
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #
+  # Siehe infobox() fuer Beispiele.
+
+  # Erstes Zeichen von Parameter 1
+  local r=${1:0:1}
+  # Zweites Zeichen von Parameter 1
+  local c=${1:1:1}
+  # Wenn nicht gesetzt, dann Standard
+  [[ -z "$r" ]] && r="-"
+  [[ -z "$c" ]] && c=":"
+  shift 1
+
+  # Alle Parametertexte in einen grossen Text umwandeln
+  local z=""
+  local lines=""
+
+  for z in "$@" ; do
+    [[ -z "$lines" ]] && lines="$z" || lines="$lines
+$z"
+  done
+  # Nun sind alle Zeilen mit \n aneinandergehaengt in $lines
+  # echo "[$lines]"
+
+  # -----
+  # Trennzeile, oben und unten
+  local t=""
+
+  # Trennzeile mit '-'
+  local m=""
+
+  # Bestimmung der Trennzeile
+  # auf die max vorkommende Laenge der Zeilen.
+  local oldifs=$IFS
+
+  IFS=$'\n'
+  while read z; do
+    # | <zeile> |
+    local u="$c $z $c"
+    if (( ${#u} > ${#t} )) ; then
+      # Tausche alle Zeichen der Zeile auf das Zeichen
+      # fuer die Trennzeile
+      t=$(sed "s/./$r/g" <<< "$u")
+      m=$(sed "s/./-/g" <<< "$u")
+    fi
+  done <<< "$lines"
+
+  # -----
+  # Ausgabe
+  #
+  # Trennzeile ausgeben
+  # echo "$t"
+  echo ".${t:1:-1}."
+
+  # Zeilen ausgeben
+  while read z; do
+    # Laenge von der Trennzeile, minus 4 (2 Zeichen auf jeder Seite)
+    local w=$(( ${#t} - 4 ))
+    # Wenn nur ein '-' dann gebe eine Trennzeile komplett mit '-' aus.
+    [[ "$z" == "-" ]] && z="${m:2:-2}"
+
+    printf "$c %-${w}s $c\n" "$z"
+  done <<< "$lines"
+
+  # Trennzeile ausgeben
+  # echo "$t"
+  echo "'${t:1:-1}'"
+
+  IFS=$oldifs
+}  # closedbox
+
+
+# -------------------------------------------------------------------
+infobox () {
+  # infobox "<message>" "<message>" ...
+  #
+  # Gibt alle <message> in einer geschlossenen Box auf stdout aus.
+  # Die Breite der Box richtet sich nach der laengsten <message>.
+  # also ggf. die <message> auf ein vernuenftig ausgebbares Mass reduzieren, siehe Beispiele.
+  #
+  # Eine <message> von nur '-' wird zu einer Trennzeile mit entsprechend vielen '-' erweitert.
+  #
+  # -----
+  # Beispiel 1:
+  #
+  # Einfache Textausgabe, jeder Parameter in einer Zeile.
+  #
+  # infobox "INFO:" "" \
+  #         "Vollkommen falsche Info!" \
+  #         "  Auch mit Einrueckungen"
+  #
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # : INFO:                    :
+  # :                          :
+  # : Vollkommen falsche Info! :
+  # :   Auch mit Einrueckungen :
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #
+  # -----
+  # Beispiel 2:
+  #
+  # Ausgabe von festen Texten kombiniert mit der Ausgabe
+  # eines Dateiinhalts (tausche Tabs gegen Leerzeichen) und Leerzeilen.
+  #
+  # infobox "INFO" "" "kljbhlblb lkjb lkjblkjb lkj bklb kljb " \
+  #         "$( cat ~oracle/CHANGES.txt | tr '\t' ' ' )"  "Abschluss"  "."   \
+  #         "" "gggggggggggggggggggggg"     "1 2 3 4 5 6 7 8 9 0"
+  #
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # | INFO                                                                              |
+  # |                                                                                   |
+  # | kljbhlblb lkjb lkjblkjb lkj bklb kljb                                             |
+  # |                                                                                   |
+  # | cd ~/rpm/quellen/oracle-toolbox-dataport.dev/usr/share/oracle_toolbox_dataport/   |
+  # | cd ~/rpm/quellen/oracle-optools.dev/usr/share/oracle_optools/                     |
+  # | cd ~/rpm/quellen/uls-client-oracle.dev/usr/share/ulsclientoracle/                 |
+  # | cd ~/rpm/quellen/uls-client-oracle-gateway.dev/usr/share/ulsclientoracle_gateway/ |
+  # | Abschluss                                                                         |
+  # | .                                                                                 |
+  # |                                                                                   |
+  # | gggggggggggggggggggggg                                                            |
+  # | 1 2 3 4 5 6 7 8 9 0                                                               |
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #
+  # Fuer super lange Zeilen ggf verwenden (Umbruch bei 80 Zeichen):
+  #
+  # infobox "Parameterdatei=$parfile" "" \
+  #         "$( fold $parfile ) "
+  #
+  # -----
+  # Beispiel 3:
+  #
+  # Ausgabe eines sehr langen Texts mit Umbruch und
+  # neu verfuegbarer Trennzeile aus Minuszeichen.
+  #
+  # infobox "INFO:" ""                             \
+  #         "Der angegebene Ausdruck"              \
+  #         "-"                                    \
+  #         "$(echo $very_long_expression | fold)" \
+  #         "-"                                    \
+  #         "ist zu lang!"
+  #
+  # .~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~.
+  # | INFO:                                                                            |
+  # |                                                                                  |
+  # | Der angegebene Ausdruck                                                          |
+  # | -------------------------------------------------------------------------------- |
+  # | zuhgvcekuhegbfkeluirg.sfukheruzbe.dehjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgf |
+  # | hafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgf |
+  # ...
+  # | hafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgfhafghjgf |
+  # | hafghjgfhafghjgfhafghjgfhafghjgfhafg                                             |
+  # | -------------------------------------------------------------------------------- |
+  # | ist zu lang!                                                                     |
+  # '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+  #
+  # (die ... deuten weitere Zeilen mit gleichem Inhalt an und sind nicht Teil der Ausgabe)
+  #
+  # Anstelle von
+  #         "$(echo $very_long_expression | fold)" \
+  # kann natuerlich auch
+  #         "$(fold <<< $very_long_expression)" \
+  # verwendet werden.
+  #
+  # -----
+
+  echo
+  closedbox "~|" "$@"
+  echo
+
+} # infobox
+
+
+# -------------------------------------------------------------------
+# errorbox
+
+errorbox () {
+  # errorbox "<message>" "<message>" ...
+  #
+  # Gibt alle <message> in einer geschlossenen Box auf stderr aus.
+  # Die Breite der Box richtet sich nach der laengsten <message>.
+  # also ggf. die <message> auf ein vernuenftig ausgebbares Mass reduzieren.
+  #
+  # Eine <message> von nur '-' wird zu einer Trennzeile mit entsprechend vielen '-' erweitert.
+  #
+  # Siehe infobox() fuer weitere Beispiele.
+  #
+  # -----
+  # Beispiel:
+  #
+  # errorbox "ERROR" "-" "Falsche Fehlermeldung!"
+  #
+  # .========================.
+  # ! ERROR                  !
+  # ! ---------------------- !
+  # ! Falsche Fehlermeldung! !
+  # '========================'
+  #
+
+  echo >&2
+  closedbox "=!" "$@" >&2
+  echo >&2
+
+} # errorbox
+
+
+
+# -------------------------------------------------------------------
+oracle_version() {
+  # Liefert die Oracle Version 4-stellig zurueck
+  # Das Environment muss gesetzt sein, sonst wird 'unknown' zurueckgeliefert
+
+  # Fehlerausgaben unterdruecken
+  [[ $(echo "$(sqlplus -v 2>/dev/null)") =~ Release[[:space:]]*([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+) ]]
+  local oraversion="${BASH_REMATCH[1]}"
+
+  if [[ "$oraversion" =~ ^[[:digit:]]+(\.[[:digit:]]+){3}$ ]] ; then
+    # Keine 100%ige Kontrolle, sollte aber reichen,
+    # um von einer erfolgreichen Ermittlung der Version auszugehen.
+    echo "$oraversion"
+    return 0
+  fi
+  echo "unknown"
+  return 1
+}
+
+
+
 
 # -------------------------------------------------------------------
 # Random password for database users
@@ -219,8 +466,8 @@ sql_value () {
   # and append just one.
   local sql=$(echo "$1" | sed 's/[ ;]*$//g')";"
 
-  ret=$(sqlplus -s -l / as sysdba <<EOF
-  set echo off heading off feedback off
+  ret=$(sqlplus -s -l -R 3 / as sysdba <<EOF
+  set echo off heading off feedback off linesize 1000
   $sql
 EOF
 )

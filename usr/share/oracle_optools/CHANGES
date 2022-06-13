@@ -1,4 +1,32 @@
 %changelog
+* Fri Mar 25 2022 Roveda <roveda@universal-logging-system.org> 1.0-43
+2022-03-31: Corrected ora_dbinfo.pl for standby databases.
+2022-03-25: Added removal of old files in nightly.sh
+
+* Fri Feb 25 2022 Roveda <roveda@universal-logging-system.org> 1.0-42
+2022-02-25: Added encoding guessing in Uls2.pm.
+2022-02-03: Fixed init_cleanup in ora_housekeeping.pl for DataGuard standby server.
+
+* Fri Jan 28 2022 Roveda <roveda@universal-logging-system.org> 1.0-41
+2022-01-28: Fixed missing transfer of networker variables to ULS in orarman.pl
+
+* Wed Jan 19 2022 Roveda <roveda@universal-logging-system.org> 1.0-40
+2022-01-19: Added CHECK LOGICAL to all BACKUP commands in the [ORARMAN] section 
+in /etc/oracle_optools/standard.conf 
+2022-01-17: orarman.pl sends all NSR_* environment variables to ULS if present.
+
+* Thu Dec 09 2021 Roveda <roveda@universal-logging-system.org> 1.0-39
+2021-12-09: Moved 'set feedback off' to beginnning of sql commands, changed print output 
+in sub exec_sql() in all perl scripts.
+2021-12-08: New ora_housekeeping.pl now fully supports multitenant, 
+and initializes the audit cleanup if not already done.
+Unsetting SQLPATH and ORACLE_PATH in all bash scripts after having sourced the environment file
+to avoid executing the login.sql which may include unwanted settings.
+
+* Thu Dec 02 2021 Roveda <roveda@universal-logging-system.org> 1.0-38
+2021-12-02:  Changed to LANG=en_US.UTF-8 in all bash scripts, determine the current
+directory by the use of 'readlink', use ooFunctions with added box functions.
+
 * Sat Nov 27 2021 Roveda <roveda@universal-logging-system.org> 1.0-37
 2021-11-27: Added full UTF-8 support to all perl scripts Umlaute should now be processed correctly
 in output to files sent to ULS.

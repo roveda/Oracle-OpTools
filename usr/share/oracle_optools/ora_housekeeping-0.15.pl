@@ -1,9 +1,9 @@
 #!/usr/bin/perl
 #
-# ora_statspack.pl - make STATSPACK snapshots and generate reports
+# ora_housekeeping.pl - purge old audit entries
 #
 # ---------------------------------------------------------
-# Copyright 2013 - 2021, roveda
+# Copyright 2016 - 2021, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -18,23 +18,28 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with Oracle OpTools. If not, see <http://www.gnu.org/licenses/>.
+# along with Oracle OpTools.  If not, see <http://www.gnu.org/licenses/>.
 #
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   perl ora_statspack.pl <configuration file> <mode> [<report_parameter_name>]
+#   perl ora_housekeeping.pl <configuration file>
 #
 # ---------------------------------------------------------
 # Description:
-#   This script takes a statspack snapshot which is saved to a table.
-#   Old snapshots are deleted, after the SNAPSHOT_RETENTION defined
-#   in the configuration file. iNothing is done, if the defined
-#   STATSPACK_OWNER is not present.
+#   This script sets the timestamp for the oldest audit entry to keep
+#   (last_archive_time) and purges all audit entries that are older 
+#   than that timestamp. By default, Oracle does not have a built-in 
+#   mechanism for that.
 #
-#   This script generates a statspack report based on the 
-#   existing statspack snapshots. The time ranges and weekdays 
-#   are defined in the conf file as the given <report_parameter_name>.
+#   The alert.log and the listener.log will be moved aside each 
+#   sunday night and compress these files with date and time placed in
+#   the filename.
+#
+#   The adrci is executed and purges all(!) other files.
+#
+#   The number of days to be kept is defined in the configuration file, 
+#   section [ORA_HOUSEKEEPING].
 #
 #   Send any hints, wishes or bug reports to: 
 #     roveda at universal-logging-system.org
@@ -50,7 +55,7 @@
 # Dependencies:
 #   Misc.pm
 #   Uls2.pm
-#   uls-client-2.0-1 or later
+#   uls-client
 #   You must set the necessary Oracle environment variables
 #   or configuration file variables before starting this script.
 #
@@ -65,64 +70,57 @@
 #
 # date            name        version
 # ----------      ----------  -------
-# 2013-04-07      roveda      0.01
-#   Creation
+# 2016-02-04      roveda      0.01
+#   Created.
 #
-# 2013-08-16      roveda      0.02
-#   Merged with ora_statspack_snapshot.pl and modified to match
-#   the new single configuration file.
-#
-# 2014-01-18      roveda      0.03
-#   Debugged the purge_snapshots(), that did not work if the 
-#   database was recovered because the dbid and instance_number 
-#   was not used in some sqls. Added DBID and INSTNO as globals.
-#
-# 2014-07-18      roveda      0.04
-#   Now supports time intervals over midnight 
-#   (like 16:00 - 06:00, and 08:00 - 08:00).
-#   Now all sql commands use bind variables instead of constant expressions.
-#
-# 2014-11-23      roveda      0.05
-#   Changed variable 'in' to 'instno'.
-#
-# 2015-02-14      roveda      0.06
-#   Added "exit value" as final numerical result (0 = "OK"),
-#   in contrast to "message" which is the final result as text.
-#   That allows numerical combined limits like:
-#   notify, if two of the last three executions have failed.
-#
-# 2016-03-09      roveda      0.07
+# 2016-03-09      roveda      0.02
 #   The "exit value" is no longer sent to ULS.
 #
-# 2016-03-18      roveda      0.08
+# 2016-03-18      roveda      0.03
 #   Added support for oracle_tools_SID.conf
 #   (This is a preparation for fully automatic updates of the oracle_tools)
 #
-# 2016-03-23      roveda      0.09
+# 2016-03-23      roveda      0.04
 #   Added the SID to the WORKFILEPREFIX.
 #
-# 2016-06-14      roveda      0.10
-#   Added the mode (SNAPSHOT/REPORT) to the WORKFILEPREFIX.
+# 2017-01-30      roveda      0.05
+#   Renamed parameter to ROTATE_LOGFILES_ONLY_GREATER_THAN.
 #
-# 2017-02-02      roveda      0.11
+# 2017-02-02      roveda      0.06
 #   Changed the default working directory to /var/tmp/oracle_optools/sid.
 #
-# 2017-02-07      roveda      0.12
+# 2017-02-07      roveda      0.07
 #   Added signal handling.
 #
-# 2017-03-21      roveda      0.13
+# 2017-03-20      roveda      0.08
+#   Fixed the age in 'purge -age' to minutes derived from the given number of days.
+#   Implemented workaround for Oracle bug concerning adr_base which is 
+#   NOT derived from diagnostic_dest but from a central file in ORACLE_HOME.
+#   Therefore not correct if multiple instances are present on one server.
 #   Fixed the broken support of sid specific configuration file.
 #
-# 2019-07-13      roveda      0.14
-#   No execution and no error when running as physical standby.
+# 2017-12-28      roveda      0.09
+#   Added the purging of old audit entries if unified auditing is enabled.
+#
+# 2018-02-15      roveda      0.10
+#   Changed the deletion of unified audit entries.
+#
+# 2018-03-09      roveda      0.11
+#   Unified auditing now has an own parameter for how long the entries 
+#   have to be kept on the local database.
+#
+# 2018-03-11      roveda      0.12
+#   Missing END IF corrected.
+#
+# 2019-07-24      roveda      0.13
+#   Restricted execution when running as physical standby in dataguard.
+#
+# 2020-07-27      roveda      0.14
+#   Added 'set serveroutput on' to PLSQL sections.
 #
 # 2021-11-27      roveda      0.15
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
-#
-# 2021-12-09      roveda      0.16
-#   Moved 'set feedback off' to beginning of sql command in exec_sql()
-#   and added more NLS settings.
 #
 #
 #   Change also $VERSION later in this script!
@@ -156,14 +154,11 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 0.16;
+my $VERSION = 0.15;
 
 # ===================================================================
 # The "global" variables
 # ===================================================================
-
-# Usage
-my $USAGE = "perl ora_statspack.pl <configuration file> <mode> [<report_parameter_name>]";
 
 # Name of this script.
 my $CURRPROG = "";
@@ -173,7 +168,6 @@ my $SQLPLUS_COMMAND = 'sqlplus -S "/ as sysdba"';
 
 my $WORKFILEPREFIX;
 my $TMPOUT1;
-my $TMPOUT2;
 my $LOCKFILE;
 my $DELIM = "!";
 
@@ -184,18 +178,6 @@ my %CFG;
 
 # This keeps the settings for the ULS
 my %ULS;
-
-# That is used to give the workfiles a timestamp.
-# If it has changed since the last run of this script, it
-# will build new workfiles (e.g. when the system is rebooted).
-# (similar to LAST_ONSTAT_Z for Informix)
-my $WORKFILE_TIMESTAMP = "";
-
-# This is to indicate "not available":
-my $NA = "n/a";
-
-# Use this to test for (nearly) zero:
-my $VERY_SMALL = 1E-60;
 
 # The $MSG will contain still the "OK", when reaching the end
 # of the script. If any errors occur (which the script is testing for)
@@ -213,23 +195,41 @@ my $IDENTIFIER;
 # This hash keeps the documentation for the teststeps.
 my %TESTSTEP_DOC;
 
-# Keeps the version of the oracle software
+# Keeps the complete version of the Oracle software
+# (11.2.0.4.5)
 my $ORACLE_VERSION = "";
+# The following variables keep the single release numbers derived from the overall version.
+# 
+# Major Database Release Number: 
+# The first digit is the most general identifier. It represents a major new version 
+# of the software that contains significant new functionality.
+# 
+# Database Maintenance Release Number: 
+# The second digit represents a maintenance release level. Some new features may also be included.
+# 
+# Application Server Release Number:
+# The third digit reflects the release level of the Oracle Application Server (OracleAS).
+# 
+# Component-Specific Release Number:
+# The fourth digit identifies a release level specific to a component. Different 
+# components can have different numbers in this position depending upon, 
+# for example, component patch sets or interim releases.
+# 
+# Platform-Specific Release Number:
+# The fifth digit identifies a platform-specific release. Usually this is a patch set. 
+# When different platforms require the equivalent patch set, 
+# this digit will be the same across the affected platforms.
 
-# dbid and instno of the current database
-# (after cloning a databse, there may be left-over snapshots of other dbids/instnos)
-my $DBID = "";
-my $INSTNO = "";
+my ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO);
 
-# The hostname where this script runs on
-my $MY_HOST = "";
+# Database role (PRIMARY/PHYSICAL STANDBY)
+my $ORACLE_DBROLE = "";
+# Database status (OPEN/MOUNTED)
+my $ORACLE_DBSTATUS = "";
 
-# Mode: SNAPSHOT / REPORT
-my $MODE = "";
 
-# Name of parameter in configuration file for report definition
-my $REPORT = "";
-
+# diagnostic_dest, used for 'set base $DIAG_DEST' in adrci
+my $DIAG_DEST = "";
 
 
 # ===================================================================
@@ -244,7 +244,7 @@ sub signal_handler {
 
   output_error_message("$CURRPROG: Signal $_[0] catched! Clean up and abort script.");
 
-  clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+  clean_up($TMPOUT1, $LOCKFILE);
 
   uls_timing($IDENTIFIER, "start-stop", "stop");
   uls_flush(\%ULS);
@@ -394,12 +394,14 @@ sub reformat_spool_file {
 } # reformat_spool_file
 
 
+
 # ------------------------------------------------------------
 sub exec_sql {
-  # <sql command>
+  # exec_sql(<sql command> [, <print the spool file>]);
+  #
   # Just executes the given sql statement against the current database instance.
-  # If <verbose> is a true expression (e.g. a 1) the sql statement will
-  # be printed to stdout.
+  # If <print the spool file> is a true expression (e.g. a 1) the spool file
+  # will be printed to stdout.
 
   # connect / as sysdba
 
@@ -407,13 +409,7 @@ sub exec_sql {
 
   my $sql = "
     set echo off
-    set feedback off
-
-    alter session set NLS_TERRITORY='AMERICA';
-    alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
-    alter session set NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS';
-    alter session set NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS TZH:TZM';
-
+    alter session set nls_territory='AMERICA';
     set newpage 0
     set space 0
     set linesize 32000
@@ -435,11 +431,11 @@ sub exec_sql {
 
     $_[0]
 
-    spool off;";
+    spool off;
+  ";
 
-  print "----- SQL -----\n$sql\n---------------\n\n";
-
-  print "----- result -----\n";
+  print "\nexec_sql()\n";
+  print "SQL: $sql\n";
 
   if (! open(CMDOUT, "| $SQLPLUS_COMMAND")) {
     output_error_message(sub_name() . ": Error: Cannot open pipe to '$SQLPLUS_COMMAND'. $!");
@@ -450,7 +446,15 @@ sub exec_sql {
     output_error_message(sub_name() . ": Error: Cannot close pipe to sqlplus. $!");
     return(0);
   }
-  print "------------------\n";
+
+  # -----
+  # Print the spool output if a true second parameter is given
+
+  if ($_[1]) {
+    print "-----[ $TMPOUT1 ]-----\n";
+    print_file($TMPOUT1);
+    print "----------------------\n";
+  }
 
   reformat_spool_file($TMPOUT1);
 
@@ -466,7 +470,8 @@ sub do_sql {
   # and outputs an error message,
   # returns 1, when no errors have occurred.
 
-  if (exec_sql($_[0])) {
+  # if (exec_sql($_[0])) {
+  if (exec_sql(@_)) {
     if (errors_in_file($TMPOUT1)) {
       output_error_message(sub_name() . ": Error: there have been errors when executing the sql statement.");
       uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
@@ -527,6 +532,7 @@ sub send_runtime {
 
 # ===================================================================
 
+
 # -------------------------------------------------------------------
 sub oracle_available {
   title(sub_name());
@@ -542,7 +548,9 @@ sub oracle_available {
   my $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
   my $db_role = trim(get_value($TMPOUT1, $DELIM, "database role"));
 
-  print "database role=$db_role, status=$db_status\n";
+  # Set global variables
+  $ORACLE_DBSTATUS = $db_status;
+  $ORACLE_DBROLE = $db_role;
 
   if ("$db_role, $db_status" eq "PRIMARY, OPEN" ) {
     # role and status is ok, create AWR report
@@ -550,444 +558,430 @@ sub oracle_available {
 
   } elsif ("$db_role, $db_status" eq "PHYSICAL STANDBY, MOUNTED") {
     # role and status is ok, but no AWR report
-    return(2);
+    print "Database role $db_role and status $db_status only allows restricted execution.\n";
 
   } else {
-    # role and status is NOT ok, no AWR report, error
-    output_error_message(sub_name() . ": Error: the database status is not 'OPEN'!");
+    # role and status is NOT ok, abort and error
+    output_error_message(sub_name() . ": Error: Database role $db_role and status $db_status do not allow an execution!");
     return(0);
   }
-
-  # -----
-  # Find some necessary information
-
-  $sql = "
-    select 'dbid', dbid from v\$database;
-    select 'instance_number', instance_number from v\$instance;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  $DBID = trim(get_value($TMPOUT1, $DELIM, "dbid"));
-  $INSTNO = trim(get_value($TMPOUT1, $DELIM, "instance_number"));
 
   return(1);
 
 } # oracle_available
 
 
+# ===================================================================
+sub purge_audit_entries {
 
-# -------------------------------------------------------------------
-sub has_statspack {
-  # Check, if statspack is installed.
+  title("Purge Audit Entries");
 
-  title(sub_name());
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
+    return(0);
+  }
 
-  my $sp_owner = uc($CFG{"ORA_STATSPACK.STATSPACK_OWNER"});
+  my $default_keep_for_days = 90;
+
+  my $keep_for_days = $CFG{"ORA_HOUSEKEEPING.KEEP_AUDIT_ENTRIES_FOR"} || $default_keep_for_days;
+  if ( $keep_for_days !~ /\d+/ ) {
+    output_error_message(sub_name() . ": Error: The parameter KEEP_AUDIT_ENTRIES_FOR is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
+    $keep_for_days = $default_keep_for_days;
+  }
+  print "Keeping the audit entries for: $keep_for_days days.\n";
 
   my $sql = "
-    variable ow VARCHAR2(30)
-    exec :ow := '$sp_owner'
 
-    variable tn VARCHAR2(30)
-    exec :tn := 'STATS%'
+    set serveroutput on;
 
-    select 'table_count', count(*)
-      from dba_tables
-      where owner = :ow
-        and table_name like :tn
-    ;
+    select 'AUDIT_TRAIL: ' || to_char(upper(value)) from v\$parameter where lower(name) = 'audit_trail';
+    select 'OLDEST_ENTRY (before purge): ' || to_char(min(TIMESTAMP), 'yyyy-mm-dd HH24:MI:SS') from dba_audit_session;
+
+    DECLARE
+      audit_setting varchar(30);
+    BEGIN
+      select upper(value) into audit_setting from v\$parameter where lower(name) = 'audit_trail';
+
+      IF audit_setting != 'NONE' then
+
+        dbms_output.put_line('Cleaning some audit trails');
+
+        -- using AUDIT_TRAIL_ALL does not work, an error is thrown. so use each single trail
+
+        IF 
+          DBMS_AUDIT_MGMT.IS_CLEANUP_INITIALIZED(DBMS_AUDIT_MGMT.AUDIT_TRAIL_AUD_STD)
+        THEN
+          dbms_output.put_line('Cleaning AUDIT_TRAIL_AUD_STD');
+          -- Set timestamp for oldest audit entry to keep
+          DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(DBMS_AUDIT_MGMT.AUDIT_TRAIL_AUD_STD, TRUNC(SYSTIMESTAMP)-$keep_for_days);
+          -- purge the entries
+          DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(audit_trail_type => DBMS_AUDIT_MGMT.AUDIT_TRAIL_AUD_STD, use_last_arch_timestamp => TRUE);
+        ELSE
+          dbms_output.put_line('AUDIT_TRAIL_AUD_STD is not initialized');
+        END IF;
+
+        IF 
+          DBMS_AUDIT_MGMT.IS_CLEANUP_INITIALIZED(DBMS_AUDIT_MGMT.AUDIT_TRAIL_FGA_STD)
+        THEN
+          dbms_output.put_line('Cleaning AUDIT_TRAIL_FGA_STD');
+          DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(DBMS_AUDIT_MGMT.AUDIT_TRAIL_FGA_STD, TRUNC(SYSTIMESTAMP)-$keep_for_days);
+          DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(audit_trail_type => DBMS_AUDIT_MGMT.AUDIT_TRAIL_FGA_STD, use_last_arch_timestamp => TRUE);
+        ELSE
+          dbms_output.put_line('AUDIT_TRAIL_FGA_STD is not initialized');
+        END IF;
+
+        IF 
+          DBMS_AUDIT_MGMT.IS_CLEANUP_INITIALIZED(DBMS_AUDIT_MGMT.AUDIT_TRAIL_OS)
+        THEN
+          dbms_output.put_line('Cleaning AUDIT_TRAIL_OS');
+          DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(DBMS_AUDIT_MGMT.AUDIT_TRAIL_OS     , TRUNC(SYSTIMESTAMP)-$keep_for_days);
+          DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(audit_trail_type => DBMS_AUDIT_MGMT.AUDIT_TRAIL_OS, use_last_arch_timestamp => TRUE);
+        ELSE
+          dbms_output.put_line('AUDIT_TRAIL_OS is not initialized');
+        END IF;
+
+        IF 
+          DBMS_AUDIT_MGMT.IS_CLEANUP_INITIALIZED(DBMS_AUDIT_MGMT.AUDIT_TRAIL_XML)
+        THEN
+          dbms_output.put_line('Cleaning AUDIT_TRAIL_XML');
+          DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(DBMS_AUDIT_MGMT.AUDIT_TRAIL_XML    , TRUNC(SYSTIMESTAMP)-$keep_for_days);
+          DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(audit_trail_type => DBMS_AUDIT_MGMT.AUDIT_TRAIL_XML, use_last_arch_timestamp => TRUE);
+        ELSE
+          dbms_output.put_line('AUDIT_TRAIL_XML is not initialized');
+        END IF;
+      END IF;
+
+    END;
+    /
+
+    select 'OLDEST_ENTRY (after purge): ' || to_char(min(TIMESTAMP), 'yyyy-mm-dd HH24:MI:SS') from dba_audit_session;
   ";
 
   if (! do_sql($sql)) {return(0)}
 
-  my $table_count = trim(get_value($TMPOUT1, $DELIM, "table_count"));
-  print "table_count of $sp_owner=$table_count\n";
+  return(1);
 
-  return($table_count);
-
-} # has_statspack
-
-
+} # purge_audit_entries
 
 
 # -------------------------------------------------------------------
-sub take_snapshot {
+sub purge_unified_audit_entries {
 
-  title(sub_name());
+  title("Purge Unified Audit Entries");
 
-  my $sp_owner = uc($CFG{"ORA_STATSPACK.STATSPACK_OWNER"});
-
-  my $sql = "EXECUTE $sp_owner.statspack.snap; ";
-
-  if (! do_sql($sql)) {return(0)}
-
-} # take_snapshot
-
-
-# -------------------------------------------------------------------
-sub purge_snapshots {
-
-  title(sub_name());
-
-  my $sql = "";
-
-  my $sp_owner = uc($CFG{"ORA_STATSPACK.STATSPACK_OWNER"});
-
-  # -----
-  # Find oldest snap id.
-
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
-
-    variable instno number
-    exec :instno := $INSTNO
-
-    select 'min_snap_id', min(snap_id) 
-      from $sp_owner.STATS\$SNAPSHOT
-      where DBID            = :dbid
-        and INSTANCE_NUMBER = :instno
-    ;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  my $OLDEST_SNAP_ID = trim(get_value($TMPOUT1, $DELIM, "min_snap_id"));
-  print "SNAP_ID(oldest)=$OLDEST_SNAP_ID\n";
-
-  if ($OLDEST_SNAP_ID !~ /\d+/) {
-    print "No snapshots found => nothing to purge.\n";
-    return(0);
-  }
-
-
-  # -----
-  # Find max snap id which is older than 5 days
-
-  my $keep_for_days = $CFG{"ORA_STATSPACK.SNAPSHOT_RETENTION"};
-  if ($keep_for_days !~ /\d+/) {
-    print STDERR sub_name() . ": Error: SNAPSHOT_RETENTION is not numeric in configuration file, using default of '5'.\n";
-    $keep_for_days = 5;
-  }
-  print "Used snapshot retention time is: $keep_for_days days.\n";
-
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
-
-    variable instno number
-    exec :instno := $INSTNO
-
-    variable kfd number
-    exec :kfd := $keep_for_days
-
-    select 'snap_id', max(snap_id) from $sp_owner.STATS\$SNAPSHOT
-      where snap_time <= sysdate - :kfd
-        and DBID            = :dbid
-        and INSTANCE_NUMBER = :instno
-    ;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  my $UPTO_SNAP_ID = trim(get_value($TMPOUT1, $DELIM, "snap_id"));
-  print "SNAP_ID (older than $keep_for_days days)=$UPTO_SNAP_ID\n";
-
-  if ($UPTO_SNAP_ID !~ /\d+/) {
-    print "No snapshots found older than $keep_for_days days => nothing to purge.\n";
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
     return(0);
   }
 
   # -----
-  # Purge old snapshots
+  my $sql = "select 'unified_auditing', upper(value) from v\$option where lower(parameter) = 'unified auditing';";
 
-  print "Purging snapshots $OLDEST_SNAP_ID to $UPTO_SNAP_ID.\n";
+  if (! do_sql($sql)) {return(0)}
 
-  # Use the direct call to the purge procedure,
-  # see $ORACLE_HOME/rdbms/admin/sppurge.sql
+  my $V = trim(get_value($TMPOUT1, $DELIM, "unified_auditing"));
+  print "Unified Auditing=$V\n";
+
+  if ($V !~ /TRUE/ ) { return(1) }
+
+  # -----
+  my $default_keep_for_days = 30;
+
+  my $keep_for_days = $CFG{"ORA_HOUSEKEEPING.KEEP_UNIFIED_AUDIT_ENTRIES_FOR"} || $default_keep_for_days;
+  if ( $keep_for_days !~ /\d+/ ) {
+    output_error_message(sub_name() . ": Error: The parameter KEEP_UNIFIED_AUDIT_ENTRIES_FOR is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
+    $keep_for_days = $default_keep_for_days;
+  }
+  print "Keeping the unified audit entries for: $keep_for_days days.\n";
 
   $sql = "
-    begin
-      statspack.purge(
-         i_begin_snap      => $OLDEST_SNAP_ID
-       , i_end_snap        => $UPTO_SNAP_ID
-       , i_snap_range      => true
-       , i_extended_purge  => false
-       , i_dbid            => $DBID
-       , i_instance_number => $INSTNO
-       );
-    end;
+    set serveroutput on;
+
+    DECLARE
+      unified_auditing varchar(30);
+      oldest_entry date;
+      keep_for_days number := $keep_for_days;
+    BEGIN
+      select upper(value) into unified_auditing from v\$option where lower(parameter) = 'unified auditing';
+
+      IF unified_auditing = 'TRUE' then
+
+        dbms_output.put_line('Cleaning the unified audit trail (AUDIT_TRAIL_UNIFIED)');
+
+        DBMS_AUDIT_MGMT.FLUSH_UNIFIED_AUDIT_TRAIL;
+
+        select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
+        dbms_output.put_line('OLDEST_ENTRY (before purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
+
+        if oldest_entry < (SYSTIMESTAMP - keep_for_days) then
+
+          -- Set timestamp for oldest audit entry to keep
+          DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(
+              audit_trail_type     => DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
+            , last_archive_time    => SYSTIMESTAMP - keep_for_days
+            , CONTAINER => DBMS_AUDIT_MGMT.CONTAINER_CURRENT
+          );
+
+          -- purge the entries
+          DBMS_AUDIT_MGMT.CLEAN_AUDIT_TRAIL(
+              AUDIT_TRAIL_TYPE           =>  DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
+            , USE_LAST_ARCH_TIMESTAMP    =>  TRUE
+          );
+        ELSE
+          dbms_output.put_line('No audit entries found older than ' || to_char(keep_for_days) || ' days (' || to_char(SYSTIMESTAMP - keep_for_days, 'yyyy-mm-dd HH24:MI:SS') || ').');
+        END IF;
+      END IF;
+
+        select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
+        dbms_output.put_line('OLDEST_ENTRY (after purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
+
+    END;
     /
 
   ";
+  # There are circumstances that keep old entries although they should be purged.
+  # A solution is still work in progress.
 
   if (! do_sql($sql)) {return(0)}
 
+  return(1);
 
-} # purge_snapshots
+} # purge_unified_audit_entries
 
 
 
 # -------------------------------------------------------------------
-sub do_reports {
+sub rm_old_files {
+  # rm_old_files(filename);
 
-  title(sub_name());
+  # The parameter contains a complete filename.
+  # THAT ONE MAY NOT BE REMOVED, but older ones that 
+  # have similar names.
+  #
+  # The file names look like:
+  # /oracle/admin/orcl/diag/tnslsnr/lbbkptd001/listener_db11a/trace/listener_db11a.log.20160209_114317
+  # or
+  # /oracle/admin/orcl/diag/rdbms/db11a/db11a/trace/alert_db11a.log.20160209_114317
 
-  # This will get more complex over time.
+  my $filename = $_[0];
+  # file name: "/oracle/admin/orcl/diag/rdbms/orcl/orcl/trace/alert_orcl.log"
+  # The files: "/oracle/admin/orcl/diag/rdbms/orcl/orcl/trace/alert_orcl.log.20160209_115600.xz"
 
-  print "Report definition: ORA_STATSPACK.$REPORT = " . $CFG{"ORA_STATSPACK.$REPORT"} . "\n";
-  # my $report = $CFG{"REPORT"};
-  my $report = $CFG{"ORA_STATSPACK.$REPORT"};
-  # 03:00-04:00
-  # 08:00 - 17:00
-  # 01:00 - 06:00, 06:00 - 12:00, 12:00 - 18:00
+  # The filename itself, followed by a dot and a 2 (the date) and anything else.
+  my $pattern = "$filename\.2.*";
 
-  # Remove all blanks
-  $report =~ tr/ //ds;
-
-  my @REPORTS = split(",", $report);
-
-  foreach my $r (@REPORTS) {
-    print "Do report for: $r\n";
-    do_report($r);
+  # Days to keep the compressed logfiles.
+  my $default_max_age = 90;
+  my $max_age = $CFG{"ORA_HOUSEKEEPING.KEEP_COMPRESSED_LOGFILES_FOR"} || $default_max_age;
+  if ( $max_age !~ /\d+/ ) {
+    output_error_message(sub_name() . ": Error: The parameter KEEP_COMPRESSED_LOGFILES_FOR is not numeric in the configuration file! The default value of $default_max_age is used.");
+    $max_age = $default_max_age;
   }
+  print "Keep compressed logfiles for $max_age days.\n";
 
-} # do_reports
+  my $dir = dirname($filename);
+  print "Directory: $dir\n";
+
+  # Open the directory
+  opendir(DIR, $dir);
+  # Array of matching files
+  my @files = grep(/$pattern/, map("$dir/$_", readdir(DIR)));
+  closedir(DIR);
+
+  foreach my $file (@files) {
+    print "Checking file: $file\n";
+    # Modification time of file, also fractions of days.
+    my $days = pround(-M $file, -1);
+    print "File was modified $days days ago.\n";
+
+    if ($days >= $max_age) {
+      print "Remove '", basename($file), "', ($days days old)...";
+      if (unlink($file)) {print "Done.\n"}
+      else {print "Failed.\n"}
+    }
+  } # foreach
+
+} # rm_old_files
 
 
 # -------------------------------------------------------------------
-sub do_report {
-  # do_report(<time_range>);
+sub diagnostic_dest {
+  title(sub_name());
+
+  # -----
+  # Get the diagnostic dest from database
+  #
+  # See :
+  #   Changing Adr Base with "diagnostic_dir" but ADRCI Shows Old Base (Doc ID 1435987.1)
+  # for further information. In short:
+  # the adr base is maintained in file 
+  # ORACLE_HOME/log/diag/adrci_dir.mif
+  # BUT THAT IS NOT SID SPECIFIC, it would not work for 
+  # multiple instances.
+
+  my $sql = "select 'DIAGNOSTIC_DEST', value from v\$parameter where upper(name) = 'DIAGNOSTIC_DEST'; ";
+
+  if (! do_sql($sql)) {return(undef)}
+
+  $DIAG_DEST = trim(get_value($TMPOUT1, $DELIM, "DIAGNOSTIC_DEST"));
+  print "DIAG_DEST=$DIAG_DEST\n";
+
+  return($DIAG_DEST);
+} # diagnostic_dest
+ 
+# -------------------------------------------------------------------
+sub rotate_logs {
+  # If any logfile is greater than a defined size, 
+  # move that aside and compress it using the command given 
+  # in the configuration file.
+
+  # How To Purge Listener Log.Xml File? [ID 816871.1]
+
+  # /oracle/admin/SID/diag/rdbms/SID/DBNAME/trace/alert_SID.log
+  # /oracle/admin/SID/diag/rdbms/SID/DBNAME/trace/sbtio.log
 
   title(sub_name());
 
-  my $sql = "";
+  # in MB
+  my $default_greater_than = 10;
+  my $greater_than = $CFG{"ORA_HOUSEKEEPING.ROTATE_LOGFILES_ONLY_GREATER_THAN"} || $default_greater_than;
+  if ( $greater_than !~ /\d+/ ) {
+    output_error_message(sub_name() . ": Error: The parameter ROTATE_LOGFILES_ONLY_GREATER_THAN is not numeric in the configuration file! The default value of $default_greater_than is used.");
+    $greater_than = $default_greater_than;
+  }
+  print "Rotate log files only if greater than $greater_than MB.\n";
 
-  my $sp_owner = uc($CFG{"ORA_STATSPACK.STATSPACK_OWNER"});
+  my $default_compress_cmd = "xz -1";
+  my $compress_cmd = $CFG{"ORA_HOUSEKEEPING.COMPRESS_COMMAND"} || $default_compress_cmd;
+  print "Compress command: $compress_cmd\n";
 
-  my ($from, $to) = split("-", $_[0]);
-
-  my ($day1, $day2);
-  my ($rep_day1, $rep_time1, $first_snap);
-  my ($rep_day2, $rep_time2, $last_snap);
+  my $cmd = "";
+  my $out = "";
 
   # -----
-  # Find the last day having a snapshot older than 'to' hours
+  # Get all tracefiles ending in .log
+  #
+  # Especially the alert.log
 
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
+  $cmd = "adrci exec=\"set base $DIAG_DEST; show tracefiles %.log\" 2>&1";
+  print "cmd: $cmd\n";
 
-    variable instno number
-    exec :instno := $INSTNO
-
-    variable tohhmm varchar2(30)
-    exec :tohhmm := '$to'
-
-    select 'day', max(to_char(snap_time, 'yyyy-mm-dd'))
-    from $sp_owner.STATS\$SNAPSHOT
-    where to_char(snap_time, 'HH24:MI') >= :tohhmm
-      and DBID            = :dbid
-      and INSTANCE_NUMBER = :instno
-    ;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  $day2 = trim(get_value($TMPOUT1, $DELIM, "day"));
-  print "DAY(to)=$day2\n";
-
-  if ($day2 !~ /\d+/) {
-    print "Could not find any day for a snapshot older than $to => cannot generate report!\n";
-    return(0);
+  my @out = `$cmd`;
+  if ( $? == -1 ) {
+    output_error_message(sub_name() . ": Error: The command failed: $!");
+    return(1);
+  } else {
+    print "The command exited with value: ", $? >> 8, "\n";
   }
 
-  # -----
-  # Find the snap id at exactly or the first snap id younger than 'day' and 'to'
+  foreach my $tracefile (@out) {
+    $tracefile = trim($tracefile);
+    print "\nTracefile: $tracefile\n";
 
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
+    my $file = $DIAG_DEST . "/" . $tracefile;
+    if (-r $file) {
+      my $fsize_bytes = -s $file;
+      my $fsize_mb = pround($fsize_bytes / (1024 * 1024), -1);
+      print "Size of file is: $fsize_mb MB ($fsize_bytes Bytes).\n";
+      # Do nothing if file is less than defined minimum.
+      if ($fsize_mb <= $greater_than) { next }
 
-    variable instno number
-    exec :instno := $INSTNO
+      my $DT = datetimestamp();
+      # 2016-02-09_114317
 
-    variable todt varchar2(30)
-    exec :todt := '$day2 $to'
+      my $new_name = "$file.$DT";
+      print "Rename $file to: $new_name\n";
 
-    select 'last_snap', min(snap_id)
-    from $sp_owner.STATS\$SNAPSHOT
-    where snap_time >= to_date(:todt, 'yyyy-mm-dd HH24:MI')
-      and DBID            = :dbid
-      and INSTANCE_NUMBER = :instno
-    ;
-  ";
+      if ( ! rename($file, $new_name) ) {
+        output_error_message(sub_name() . ": Error: Cannot rename file $file.");
+        next;
+      } else {
 
-  if (! do_sql($sql)) {return(0)}
+        print "Command: $compress_cmd $new_name\n";
+        system("$compress_cmd $new_name");
+        if ( $? == -1 ) {
+          output_error_message(sub_name() . ": Error: The command failed: $!");
+          next;
+        } else {
+          print "The command exited with value: ", $? >> 8, "\n";
+        }
 
-  $last_snap = trim(get_value($TMPOUT1, $DELIM, "last_snap"));
-  print "LAST_SNAP=$last_snap\n";
+        # Remove old compressed files
+        rm_old_files($file);
 
-  if ($last_snap !~ /\d+/) {
-    print "Last snap $last_snap is not numeric => cannot generate report!\n";
-    return(0);
+      } # if rename
+    } # if -r file
+
+  } # foreach
+
+  return(0);
+
+} # rotate_logs
+
+
+
+# -------------------------------------------------------------------
+sub adrci_purge {
+
+  # echo "INFO: adrci purge started at `date`"
+  # adrci exec="show homes"|grep -v : | while read file_line
+  # do
+  # purge -age 10080  # hours
+  # done
+
+  title(sub_name());
+
+  my $default_keep_for_days = 60;
+
+  my $keep_for_days = $CFG{"ORA_HOUSEKEEPING.KEEP_ADR_FOR"} || $default_keep_for_days;
+  if ( $keep_for_days !~ /\d+/ ) {
+    output_error_message(sub_name() . ": Error: The parameter KEEP_ADR_FOR is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
+    $keep_for_days = $default_keep_for_days;
+  }
+  print "Keeping the audit entries for: $keep_for_days days.\n";
+
+  my $keep_for_mins = $keep_for_days * 24 * 60;
+  print "Keeping the audit entries for: $keep_for_mins minutes.\n";
+
+  my $cmd = "adrci exec=\"set base $DIAG_DEST; show homes\" 2>&1";
+  print "cmd: $cmd\n";
+
+  my @adr_homes = `$cmd`;
+  if ( $? == -1 ) {
+    output_error_message(sub_name() . ": Error: The command failed: $!");
+  } else {
+    print "The command exited with value: ", $? >> 8, "\n";
   }
 
-  # -----
-  # Find the exact day and time for that snapshot
-  # (for the name of the report)
+  foreach my $adr_home (@adr_homes) {
+    chomp($adr_home);
 
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
+    # First line is a title
+    # ADR Homes:
+    if ($adr_home =~ /:/) {next;}
 
-    variable instno number
-    exec :instno := $INSTNO
+    print "\n";
+    print "Purging ADR home: $adr_home\n";
 
-    variable lastsnap number
-    exec :lastsnap := $last_snap
+    $cmd = "adrci exec=\"set base $DIAG_DEST; set homepath $adr_home; purge -age $keep_for_mins\" 2>&1";
+    print "cmd: $cmd\n";
 
-    select
-      'snap_datetime'
-      , to_char(snap_time, 'yyyy-mm-dd')
-      , to_char(snap_time, 'HH24MI')
-    from $sp_owner.STATS\$SNAPSHOT
-    where snap_id         = :lastsnap
-      and DBID            = :dbid
-      and INSTANCE_NUMBER = :instno
-    ;
-  ";
+    my $out = `$cmd`;
+    if ( $? == -1 ) {
+      output_error_message(sub_name() . ": Error: The command failed: $!");
+    } else {
+      print "The command exited with value: ", $? >> 8, "\n";
+    }
 
-  if (! do_sql($sql)) {return(0)}
+    print "$out\n";
 
-  $rep_day2  = trim(get_value($TMPOUT1, $DELIM, "snap_datetime", 2));
-  $rep_time2 = trim(get_value($TMPOUT1, $DELIM, "snap_datetime", 3));
+  } # foreach
 
-  print "End date for report=$rep_day2, time=$rep_time2\n";
+  print "\n";
 
-  if ($rep_day2 !~ /\d+/) {
-    print "Cannot determine the day of the last snap $last_snap => cannot generate report!\n";
-    return(0);
-  }
+  return(0);
 
-  if ($rep_time2 !~ /\d+/) {
-    print "Cannot determine the time of the last snap $last_snap => cannot generate report!\n";
-    return(0);
-  }
-
-  # -----
-  # Check if midnight is in between
-
-  $day1 = $day2;
-  if ($to le $from) {
-    $sql = "
-      select 'day1', to_char(to_date('$day2', 'yyyy-mm-dd') - 1, 'yyyy-mm-dd') from dual;
-    ";
-    if (! do_sql($sql)) {return(0)}
-    $day1 = trim(get_value($TMPOUT1, $DELIM, "day1"));
-  }
-
-  # -----
-  # Find the first snap id at exactly or the first snap id older than 'day' and 'from'
-
-
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
-
-    variable instno number
-    exec :instno := $INSTNO
-
-    variable day1 varchar2(30)
-    exec :day1 := '$day1'
-
-    variable frhhmm varchar2(30)
-    exec :frhhmm := '$from'
-
-    select 'first_snap', max(snap_id)
-    from $sp_owner.STATS\$SNAPSHOT
-    where to_char(snap_time, 'yyyy-mm-dd') <= :day1
-      and to_char(snap_time, 'HH24MI')     <= :frhhmm
-      and DBID            = :dbid
-      and INSTANCE_NUMBER = :instno
-    ;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  $first_snap = trim(get_value($TMPOUT1, $DELIM, "first_snap"));
-  print "FIRST_SNAP=$first_snap\n";
-
-  if ($first_snap !~ /\d+/) {
-    print "First snap $first_snap is not numeric => cannot generate report!\n";
-    return(0);
-  }
-
-
-  # -----
-  # Find the exact day and time for that snapshot
-
-  $sql = "
-    variable dbid number
-    exec :dbid := $DBID
-
-    variable instno number
-    exec :instno := $INSTNO
-
-    variable firstsnap number
-    exec :firstsnap := $first_snap
-
-    select
-      'snap_datetime'
-      , to_char(snap_time, 'yyyy-mm-dd')
-      , to_char(snap_time, 'HH24MI')
-    from $sp_owner.STATS\$SNAPSHOT
-    where snap_id         = :firstsnap
-      and DBID            = :dbid
-      and INSTANCE_NUMBER = :instno
-    ;
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  $rep_day1  = trim(get_value($TMPOUT1, $DELIM, "snap_datetime", 2));
-  $rep_time1 = trim(get_value($TMPOUT1, $DELIM, "snap_datetime", 3));
-  print "Begin date for report=$rep_day1, time=$rep_time1\n";
-
-  if ($rep_day1 !~ /\d+/) {
-    print "Cannot determine the day of the first snap $first_snap => cannot generate report!\n";
-    return(0);
-  }
-
-  if ($rep_time1 !~ /\d+/) {
-    print "Cannot determine the time of the first snap $first_snap => cannot generate report!\n";
-    return(0);
-  }
-
-  # -----
-  # Generate the report
-
-  # Run the report
-  $sql = "
-    DEFINE begin_snap=$first_snap
-    DEFINE end_snap=$last_snap
-    define report_name=$TMPOUT2
-    @?/rdbms/admin/spreport.sql
-
-  ";
-
-  if (! do_sql($sql)) {return(0)}
-
-  # Send the statspack report
-  uls_file({
-    teststep => $IDENTIFIER
-   ,detail   => "Statspack Report"
-   ,filename => $TMPOUT2
-   ,rename_to => $rep_day1 . "_" . $rep_time1 . "-" . $rep_day2 . "_" . $rep_time2 . ".txt"
-  });
-
-} # do_report
+} # adrci_purge
 
 
 
@@ -1003,8 +997,6 @@ sub do_report {
 
 # $CURRPROG = basename($0, ".pl");   # extension is removed
 $CURRPROG = basename($0);
-$IDENTIFIER = "_" . basename($0, ".pl");
-
 my $currdir = dirname($0);
 my $start_secs = time;
 
@@ -1028,11 +1020,10 @@ print "$CURRPROG is started in directory $currdir\n";
 # -------------------------------------------------------------------
 # Get configuration file contents
 
-# first command line argument
 my $cfgfile = $ARGV[0];
 print "configuration file=$cfgfile\n";
 
-my @Sections = ( "GENERAL", "ORACLE", "ULS", "ORA_STATSPACK" );
+my @Sections = ( "GENERAL", "ORACLE", "ULS", "ORA_HOUSEKEEPING" );
 print "Reading sections: ", join(",", @Sections), " from configuration file\n";
 
 if (! get_config2($cfgfile, \%CFG, @Sections)) {
@@ -1056,35 +1047,8 @@ if (-r $cfgfile) {
   print "$CURRPROG: Info: ORACLE_SID-specific configuration file '$cfgfile' NOT found. Executing with defaults.\n";
 }
 
-print "-- Effective configuration:\n";
 show_hash(\%CFG, "=");
 print "-----\n\n";
-
-# -----
-# second(!) command line argument
-$MODE = uc($ARGV[1]);
-if (! $MODE) {
-  print STDERR $CURRPROG . ": Error: no mode given as command line argument!\n";
-  exit(2);
-}
-
-if ( $MODE ne "REPORT" && $MODE ne "SNAPSHOT" ) {
-  print STDERR $CURRPROG . ": Error: You must specify 'SNAPSHOT' or 'REPORT' as command line argument!\n";
-  print STDERR $CURRPROG . ": Usage: $USAGE\n";
-  exit(2);
-}
-print "MODE:$MODE\n";
-
-# -----
-if ( $MODE eq "REPORT" ) {
-  # third command line argument
-  $REPORT = $ARGV[2];
-  if (! $REPORT) {
-    print STDERR $CURRPROG . ": Error: no report specification parameter given as command line argument!\n";
-    exit(2);
-  }
-}
-
 
 # ----------
 # This sets the %ULS to all necessary values
@@ -1093,23 +1057,19 @@ if ( $MODE eq "REPORT" ) {
 
 uls_settings(\%ULS, \%CFG);
 
-print "-- ULS settings:\n";
-show_hash(\%ULS, " = ");
-print "-----\n";
+show_hash(\%ULS);
 
 # ----------
 # Check for IDENTIFIER
 
 # Set default
-$IDENTIFIER = $CFG{"ORA_STATSPACK.IDENTIFIER"} || $IDENTIFIER;
+my $default_identifier = "_" . basename($0, ".pl");
+$IDENTIFIER = $CFG{"ORA_HOUSEKEEPING.IDENTIFIER"} || $default_identifier;
 print "IDENTIFIER=$IDENTIFIER\n";
 # From here on, you may use $IDENTIFIER for uniqueness
 
 # -------------------------------------------------------------------
 # environment
-
-if ((! $ENV{"ORACLE_SID"})  && $CFG{"ORACLE.ORACLE_SID"})  {$ENV{"ORACLE_SID"}  = $CFG{"ORACLE.ORACLE_SID"}}
-if ((! $ENV{"ORACLE_HOME"}) && $CFG{"ORACLE.ORACLE_HOME"}) {$ENV{"ORACLE_HOME"} = $CFG{"ORACLE.ORACLE_HOME"}}
 
 if (! $ENV{"ORACLE_SID"}) {
   print STDERR "$CURRPROG: Error: ORACLE_SID is not set in the environment => aborting.\n";
@@ -1138,22 +1098,17 @@ if ( ! (-e $workdir)) {
   }
 }
 
-# Prefix for work files.
+# Prefix for work files
 $WORKFILEPREFIX = "${IDENTIFIER}";
-# _ora_statspack
+# _ora_housekeeping
 #
-# If no oracle sid is found in the workfile prefix, then append it for uniqueness.
-if ($WORKFILEPREFIX !~ /$ENV{"ORACLE_SID"}/i) { $WORKFILEPREFIX .= "_" . $ENV{"ORACLE_SID"} }
-# _ora_statspack_orcl
-
-# If the mode cannot be found in the workfile prefix, then append it for uniqueness.
-if ($WORKFILEPREFIX !~ /$MODE/i) { $WORKFILEPREFIX .= "_" . lc($MODE) }
-# _ora_statspack_orcl_snapshot
-
+# If no oracle sid is found in the workfile prefix, then add it for uniqueness.
+if ($WORKFILEPREFIX !~ /$ENV{"ORACLE_SID"}/) { $WORKFILEPREFIX .= "_" . $ENV{"ORACLE_SID"} }
+# _ora_housekeeping_orcl
 #
 # Prepend the path
 $WORKFILEPREFIX = "${workdir}/${WORKFILEPREFIX}";
-# /oracle/admin/orcl/oracle_tools/var/_ora_statspack_orcl
+# /oracle/admin/orcl/oracle_tools/var/_ora_housekeeping_orcl
 
 print "WORKFILEPREFIX=$WORKFILEPREFIX\n";
 
@@ -1196,9 +1151,13 @@ if (-e $initial_logfile) {
   else {print "Failed.\n"}
 
   print "Remove possible old temporary files.\n";
-  # Remove old .tmp files
+
+  # Read the directory
   opendir(INITDIR, $initdir);
   my @files = grep(/$CURRPROG.*\.tmp/, map("$initdir/$_", readdir(INITDIR)));
+  closedir(INITDIR);
+
+  # Remove old .tmp files
   foreach my $file (@files) {
     # Modification time of file, also fractions of days.
     my $days = pround(-M $file, -1);
@@ -1225,7 +1184,12 @@ set_uls_timestamp($d);
 # uls_show();
 
 # ---- Send name of this script and its version
+# uls_value($IDENTIFIER, "script name, version", "$CURRPROG, $VERSION", " ");
+
 uls_value($IDENTIFIER, "script name, version", "$CURRPROG, $VERSION", " ");
+
+# Signal handling, do own housekeeping, send data to ULS and exit on most signals.
+use sigtrap 'handler' => \&signal_handler, 'normal-signals', 'error-signals';
 
 uls_timing({
     teststep  => $IDENTIFIER
@@ -1234,15 +1198,14 @@ uls_timing({
 });
 
 # Send the ULS data up to now to have that for sure.
-# uls_flush(\%ULS);
-# No, do not do that: it will generate ULS data, even if statspack is not activated!
+uls_flush(\%ULS);
 
 # -----
 # Define some temporary file names
 $TMPOUT1 = "${WORKFILEPREFIX}_1.tmp";
 print "TMPOUT1=$TMPOUT1\n";
-$TMPOUT2 = "${WORKFILEPREFIX}_2.tmp";
-print "TMPOUT2=$TMPOUT2\n";
+# $TMPOUT2 = "${WORKFILEPREFIX}_2.tmp";
+# print "TMPOUT2=$TMPOUT2\n";
 
 print "DELIM=$DELIM\n";
 
@@ -1258,78 +1221,53 @@ $SQLPLUS_COMMAND = $CFG{"ORACLE.SQLPLUS_COMMAND"} || $SQLPLUS_COMMAND;
 %TESTSTEP_DOC = %{doc2hash(\*DATA)};
 
 
-# -----
-# Which mode
-uls_value($IDENTIFIER, "mode", $MODE, " ");
-if ($REPORT) {
-  uls_value($IDENTIFIER, "report", $REPORT, " ");
-}
-
 # -------------------------------------------------------------------
 # The real work starts here.
 # ------------------------------------------------------------
 
-my $ret = oracle_available();
-if ($ret == 0) {
+if (! oracle_available() ) {
   output_error_message("$CURRPROG: Error: Oracle database is not available => aborting script.");
 
-  clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+  clean_up($TMPOUT1, $LOCKFILE);
 
   send_runtime($start_secs);
   uls_timing($IDENTIFIER, "start-stop", "stop");
   uls_flush(\%ULS);
 
   exit(1);
+}
 
-} elsif ($ret == 2) {
-  print "INFO: The database role and database status is not suitable for STATSPACK actions.\n";
-  clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+$DIAG_DEST = diagnostic_dest();
+if ( ! $DIAG_DEST ) {
+  output_error_message("$CURRPROG: Error: diagnostic_dest cannot be determined => aborting script.");
+
+  clean_up($TMPOUT1, $LOCKFILE);
 
   send_runtime($start_secs);
   uls_timing($IDENTIFIER, "start-stop", "stop");
-  # Do not flush anything to ULS, be silent.
-  # uls_flush(\%ULS);
+  uls_flush(\%ULS);
 
-  exit(0);
+  exit(1);
 }
 
+my @wday = qw/Monday Tuesday Wednesday Thursday Friday Saturday Sunday/;
+my $day_of_week = $wday[ (localtime(time))[6] - 1 ];
 
-my $DO_FLUSH = 1;
+# if ($day_of_week =~ /SUNDAY/i) {
+  rotate_logs();
+# }
 
-if (has_statspack()) {
+adrci_purge();
 
-  if ( $MODE eq "REPORT" ) {
+purge_audit_entries();
 
-    # -----
-    # Generate the STATSPACK Reports
+purge_unified_audit_entries();
 
-    do_reports();
-
-  } else {
-
-    # -----
-    # Take a snapshot
-    # and delete old snapshots.
-
-    take_snapshot();
-    purge_snapshots();
-
-  }
-
-} else {
-
-  print "Statspack is not installed => do nothing.\n";
-  $DO_FLUSH = 0;
-  # Send nothing to ULS, be silent.
-
-}
-
-
-
+# -----
+# Continue here with more tests.
 
 # The real work ends here.
 # -------------------------------------------------------------------
-
 
 # Any errors will have sent already its error messages.
 # This is just the final message.
@@ -1341,13 +1279,15 @@ send_doc($CURRPROG, $IDENTIFIER);
 send_runtime($start_secs);
 uls_timing($IDENTIFIER, "start-stop", "stop");
 
-if ( $DO_FLUSH ) {
-  # Transfer to ULS only if STATSPACK is installed
-  uls_flush(\%ULS);
-}
+# Do not transfer to ULS
+# uls_flush(\%ULS, 1);
+#
+# Transfer to ULS
+uls_flush(\%ULS);
 
 # -------------------------------------------------------------------
-clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+# clean_up($TMPOUT1, $TMPOUT2, $LOCKFILE);
+clean_up($TMPOUT1, $LOCKFILE);
 
 title("END");
 
@@ -1379,28 +1319,16 @@ __END__
 # Do not use the '\' but use '\\'!
 
 #########################
-*ora_statspack.pl
-================
+*ora_housekeeping.pl
+=====================
 
-This script can take statspack snapshots and can generate statspack reports for daily time intervals.
+This script sets the timestamp for the oldest audit entry to keep (last_archive_time) and purges all audit entries that are older than that timestamp. By default, Oracle does not have a built-in mechanism for that.
 
-You must have set up the statspack functionality, typically with database user PERFSTAT. See the Oracle documentation on how to set up statspack (spcreate).
+This script is part of the Oracle OpTools and works best with the Universal Logging System (ULS). Visit the ULS homepage at http://www.universal-logging-system.org
 
-Define the database user for statspack in the oracle_tools.conf. The script does only work, if that database user exist and owns database objects.
+This script is run by a calling script, typically 'ora_housekeeping', that sets the correct environment before starting the Perl script ora_housekeeping.pl. The 'ora_housekeeping' in turn is called by the cron daemon on Un*x or through a scheduled task on Wind*ws. The script generates a log file. The directory defined by WORKING_DIR in the oracle_tools.conf configuration file is used as the destination for those files.
 
-Take a snapshot with:
-$ ./ora_statspack SNAPSHOT
-
-Generate a report with:
-$ ./ora_statspack REPORT <report_name>
-
-where the <report_name> must exist as parameter in the oracle_tools.conf, like:
-  DAILY_REPORT = 08:00 - 17:00
-in the [ORA_STATSPACK] section.
-
-
-The script is part of the Oracle OpTools package of the Universal Logging System (ULS), see also: http://www.universal-logging-system.org
-
+You may place the scripts in whatever directory you like.
 
 script name, version:
   Sends the name and the current version of this script.
@@ -1416,15 +1344,15 @@ runtime:
   The runtime of the script. This does not include the transmission
   to the ULS.
 
-Statspack Report:
-  One or more text files that contain the generated statspack reports.
-
 # exit value:
 #   Is 0 if the script has finished without errors,
 #   1 if errors have occurred. This is intended to monitor the
 #   proper execution of this script.
+# 
 
-Copyright 2013-2016, roveda
+Copyright 2016 - 2020, roveda
+
+This file is part of Oracle OpTools.
 
 Oracle OpTools is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

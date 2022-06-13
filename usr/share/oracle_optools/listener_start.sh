@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # listener_start.sh
 #
 # ---------------------------------------------------------
-# Copyright 2019, roveda
+# Copyright 2019, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -67,28 +67,20 @@
 # 2019-05-14      roveda      0.01
 #   Extracted from instance_start.sh
 #
+# 2021-12-02      roveda      0.02
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
 #
 # ---------------------------------------------------------
 
 USAGE="listener_start.sh  <oracle_environment_script>  { <listener_name> | DEFAULT | NONE }"
 
-# -------------------------------------------------------------------
-title () {
-  # Echo a title to stdout.
-  local DT=`date +"%Y-%m-%d %H:%M:%S"`
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
-  local A="--[ $*"
-  A=`echo $A | awk '{printf("%.53s", $0)}'`
-  A="$A ]---------------------------------------------------------------"
-  A=`echo $A | awk '{printf("%.56s", $0)}'`
-  A="$A[ $DT ]-"
+. ./ooFunctions
 
-  echo
-  echo $A
-  echo
-}
-# -------------------------------------------------------------------
-# -------------------------------------------------------------------
 
 title "$0 started"
 
@@ -96,14 +88,10 @@ title "$0 started"
 STARTED=$(date +"%Y-%m-%d")
 
 # -----
-# Go to directory where this script is placed
-cd $(dirname $0)
-
-# -----
 # Check number of arguments
 
 if [[ $# -ne 2 ]] ; then
-  echo "$USAGE"
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -113,21 +101,21 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => abort"
   exit 2
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 
 # -----
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
+
 
 # -----
 # HOSTNAME is used, but may not be set in cronjobs
@@ -141,12 +129,11 @@ export HOSTNAME
 title "Starting Oracle Listener"
 
 LISTENER_NAME="$2"
-
-UC_LISTENER_NAME=$(echo $LISTENER_NAME | tr [[:lower:]] [[:upper:]])
+UC_LISTENER_NAME=${LISTENER_NAME^^}
 
 case $UC_LISTENER_NAME in
   NONE)
-    echo "No listener is started!"
+    infobox "INFO:"  "No listener is started!"
     title "Finished"
     exit 0
     ;;
@@ -158,10 +145,10 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl start
     if [ $? -ne 0 ] ; then
-      echo "ERROR: Cannot start the default listener!"
+      errorbox "ERROR:" "Cannot start the default listener!"
       exit 1
     else
-      echo "INFO: Successfully started the default listener."
+      infobox "INFO:" "Successfully started the default listener."
     fi
     ;;
   *)
@@ -170,10 +157,10 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl start $LISTENER_NAME
     if [ $? -ne 0 ] ; then
-      echo "ERROR: Cannot start the non-default listener '$LISTENER_NAME'!"
+      errorbox "ERROR:" "Cannot start the non-default listener '$LISTENER_NAME'!"
       exit 1
     else
-      echo "INFO: Successfully started the non-default listener '$LISTENER_NAME'."
+      infobox "INFO:" "Successfully started the non-default listener '$LISTENER_NAME'."
     fi
     ;;
 esac

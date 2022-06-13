@@ -3,7 +3,7 @@
 # oracle_startstop
 #
 # ---------------------------------------------------------
-# Copyright 2017, roveda
+# Copyright 2016, 2017, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -77,13 +77,23 @@
 # 2017-01-13      roveda      0.03
 #   Command line parameters changed.
 #
+# 2021-12-02      roveda      0.04
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
+#
 # -------------------------------------------------------------------
 
 USAGE="oracle_startstop {start|stop}  <oracle_environment_script>  {<listener_name>|DEFAULT|NONE}  [ABORT]"
 
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
+. ./ooFunctions
+
 if [[ $# -lt 3 ]] ; then
-  echo "Improper number of parameters => ABORT"
-  echo "$USAGE"
+  echoerr "ERROR: Improper number of parameters => ABORT"
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -102,27 +112,27 @@ LISTENER="$3"
 ABORT="$4"
 ABORT=$(echo "$ABORT" | awk '{print toupper($0)}' )
 
-# -----
-# Go to directory where this script is placed
-cd `dirname $0`
-
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 case $START_STOP in
 
   start)
-    su - oracle -c "/usr/share/oracle_optools/instance_start.sh \"$ORAENV\" \"$LISTENER\""
+    # su - oracle -c "/usr/share/oracle_optools/instance_start.sh \"$ORAENV\" \"$LISTENER\""
+    su - oracle -c "$mydir/instance_start.sh \"$ORAENV\" \"$LISTENER\""
     exit $?
     ;;
 
   stop)
-    su - oracle -c "/usr/share/oracle_optools/instance_stop.sh \"$ORAENV\" \"$LISTENER\" \"$ABORT\"" 
+    # su - oracle -c "/usr/share/oracle_optools/instance_stop.sh \"$ORAENV\" \"$LISTENER\" \"$ABORT\"" 
+    su - oracle -c "$mydir/instance_stop.sh \"$ORAENV\" \"$LISTENER\" \"$ABORT\"" 
     exit $?
     ;;
 
   *)
-    echo "$USAGE"
+    echoerr "ERROR: Wrong parameter '$START_STOP' given => ABORT"
+    echoerr "$USAGE"
     exit 1
     ;;
 esac

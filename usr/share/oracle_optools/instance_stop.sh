@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # instance_stop.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2019, roveda
+# Copyright 2016-2019, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -77,6 +77,11 @@
 # 2019-07-03      roveda      0.03
 #   Debugged the test of the parameter count. And ABORT is now recognized.
 #
+# 2021-12-02      roveda      0.04
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
+#
 # ---------------------------------------------------------
 #
 
@@ -84,7 +89,9 @@ USAGE="instance_stop.sh  <oracle_environment_script>  { <listener_name> | DEFAUL
 
 # -----
 # Go to directory where this script is placed
-cd $(dirname $0)
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
 . ./ooFunctions
 
 # -----
@@ -97,7 +104,7 @@ STARTED=$(date +"%Y-%m-%d")
 # Check number of arguments
 
 if [[ $# -lt 2 ]] ; then
-  echo "Error: You must at least specify 2 parameters => ABORTING SCRIPT"
+  echoerr "Error: You must at least specify 2 parameters => ABORTING SCRIPT"
   echo "$USAGE"
   exit 1
 fi
@@ -108,22 +115,21 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => ABORTING SCRIPT"
+  echoerr "Error: environment script '$ORAENV' not found => ABORTING SCRIPT"
   exit 2
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => ABORTING SCRIPT"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => ABORTING SCRIPT"
   exit 2
 fi
 
 # -----
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 # -----
 # HOSTNAME is used, but perhaps not set in cronjobs
@@ -140,12 +146,11 @@ echo
 title "Stopping the Listener"
 
 LISTENER_NAME="$2"
-
-UC_LISTENER_NAME=$(echo $LISTENER_NAME | tr [[:lower:]] [[:upper:]])
+UC_LISTENER_NAME=${LISTENER_NAME^^}
 
 case $UC_LISTENER_NAME in
   NONE)
-    echo "No listener is stopped!"
+    infobox "INFO:" "No listener is stopped!"
     ;;
   DEFAULT)
     # If 'DEFAULT' has been given as listener name,
@@ -155,9 +160,9 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl stop
     if [ $? -ne 0 ] ; then
-      echo "WARNING: Cannot stop the default listener!"
+      infobox "WARNING:" "Cannot stop the default listener!"
     else
-      echo "INFO: Successfully stopped the default listener."
+      infobox "INFO:" "Successfully stopped the default listener."
     fi
     ;;
   *)
@@ -166,9 +171,9 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl stop $LISTENER_NAME
     if [ $? -ne 0 ] ; then
-      echo "WARNING: Cannot stop the non-default listener '$LISTENER_NAME'!"
+      infobox "WARNING:" "Cannot stop the non-default listener '$LISTENER_NAME'!"
     else
-      echo "INFO: Successfully stopped the non-default listener '$LISTENER_NAME'."
+      infobox "INFO:" "Successfully stopped the non-default listener '$LISTENER_NAME'."
     fi
     ;;
 esac
@@ -190,17 +195,13 @@ exit;
 "
 
 ABORT_MSG="
-+------------------------------------------------------------+
-|                                                            |
-| Performing a  SHUTDOWN ABORT                               |
-| followed by a STARTUP RESTRICT                             |
-| and a final   SHUTDOWN IMMEDIATE                           |
-|       this may take a while...                             |
-|                                                            |
-| The prompt 'SQL>' may be displayed for several minutes,    |
-| don't be impatient! This is Oracle!                        |
-|                                                            |
-+------------------------------------------------------------+
+Performing a  SHUTDOWN ABORT
+followed by a STARTUP RESTRICT
+and a final   SHUTDOWN IMMEDIATE
+      this may take a while...
+
+The prompt 'SQL>' may be displayed for several minutes,
+don't be impatient! This is Oracle!
 "
 
 # -----
@@ -210,15 +211,11 @@ exit;
 "
 
 SHUTDOWN_MSG="
-+------------------------------------------------------------+
-|                                                            |
-| Performing a SHUTDOWN IMMEDIATE                            |
-|       this may take a while...             |
-|                                                            |
-| The prompt 'SQL>' may be displayed for several minutes,    |
-| don't be impatient! This is Oracle!                        |
-|                                                            |
-+------------------------------------------------------------+
+Performing a SHUTDOWN IMMEDIATE
+      this may take a while...
+
+The prompt 'SQL>' may be displayed for several minutes,
+don't be impatient! This is Oracle!
 "
 
 if [ "$ABORT" = "ABORT" ] ; then
@@ -226,11 +223,13 @@ if [ "$ABORT" = "ABORT" ] ; then
   # Long running transactions may deny the clean 'shutdown immediate',
   # so use 'shutdown abort' followed by a clean 'shutdown immediate'.
   # Currently, I do not know of any other solution.
-  echo "$ABORT_MSG"
+  infobox "INFO:" "$ABORT_MSG"
+
   exec_sql "$ABORT_COMMAND"
 else
   # shutdown immediate
-  echo "$SHUTDOWN_MSG"
+  infobox "INFO:" "$SHUTDOWN_MSG"
+
   sql_exec "$SHUTDOWN_COMMAND"
 fi
 

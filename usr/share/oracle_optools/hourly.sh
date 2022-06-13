@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # hourly.sh - execute scripts each hour
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016-2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -59,29 +59,42 @@
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2021-12-02      roveda      0.03
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#
+# 2021-12-08      roveda      0.04
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
+#
 #
 # ---------------------------------------------------------
 
 # Go to directory where this script is placed
-cd `dirname $0`
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
+. ./ooFunctions
 
 # -----
 # Set environment
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => abort"
   exit 1
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
   echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   echo
   exit 1
 fi
+
+export LANG=en_US.UTF-8
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
 
 # -----
 # Take a database performance snapshot

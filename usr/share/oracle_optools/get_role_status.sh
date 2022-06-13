@@ -62,13 +62,18 @@
 #   Which would spoil the expected output that is further processed in 
 #   other bash scripts.
 #
+# 2021-12-02      roveda      0.03
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#
 # ------------------------------------------------------------------------------
 
 USAGE="get_role_status.sh  [ <oracle_env> ]"
 
-cd $(dirname $0)
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
-. /usr/share/oracle_optools/ooFunctions
+. ./ooFunctions
 
 # --------------------------
 # Stay silent!
@@ -96,6 +101,7 @@ if [[ -z "$ORACLE_SID" ]] ; then
   exiterr 2 "ERROR: the Oracle environment is not set up correctly => ABORT"
 fi
 
+export LANG=en_US.UTF-8
 
 dbrole=$(sql_value "select database_role from v\$database;")
 if [[ "$dbrole" =~ ORA-[0-9]{3,} ]] ; then

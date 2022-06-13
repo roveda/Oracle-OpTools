@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # THIS IS WORK IN PROGRESS!
 # DONT USE!

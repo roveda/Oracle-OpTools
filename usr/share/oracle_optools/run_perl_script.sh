@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # run_perl_script.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2021, roveda
+# Copyright 2016-2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -72,21 +72,33 @@
 #   The exit value of the executed perl script is used as the exit value of this script.
 #   Added more NLS_ variables.
 #
+# 2021-12-02      roveda      0.05
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8, use ooFunctions.
+#
+# 2021-12-08      roveda      0.06
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
+#
 # ===================================================================
 
 
 USAGE="run_perl_script.sh <oracle_environment_script> <perl_script_name> <standard_conf_file> [ <parameters_to_perl_script> ] "
 
-unset LC_ALL
-export LANG=C
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
-cd `dirname $0`
+. ./ooFunctions
+
+unset LC_ALL
+# export LANG=C
+export LANG=en_US.UTF-8
+
 
 # -----
 # Check number of arguments
 
 if [[ $# -lt 3 ]] ; then
-  echo "$USAGE"
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -97,14 +109,13 @@ ORAENV=$(eval "echo $1")
 shift 1
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "ERROR: environment script '$ORAENV' not found => aborting script"
   exit 2
 fi
 
 . "$ORAENV"
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
+  echoerr "ERROR: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 
@@ -115,8 +126,7 @@ SCRIPT="$1"
 shift 1
 
 if [[ ! -r "$SCRIPT" ]] ; then
-  echo
-  echo "Error: The script '$SCRIPT' is not readable or cannot be found => abort"
+  echoerr "ERROR: The script '$SCRIPT' is not readable or cannot be found => aborting script"
   exit 2
 fi
 
@@ -128,8 +138,7 @@ CONF="$1"
 shift 1
 
 if [[ ! -r "$CONF" ]] ; then
-  echo
-  echo "Error: The standard configuration file '$CONF' is not readable or cannot be found => abort"
+  echoerr "ERROR: The standard configuration file '$CONF' is not readable or cannot be found => aborting script"
   exit 2
 fi
 
@@ -143,6 +152,19 @@ export HOSTNAME
 # Remember to include the directory where flush_test_values can
 # be found ('/usr/bin' or '/usr/local/bin') in the PATH.
 
+# -----
+unset LC_ALL
+# Set LANG explicitly to be used in the Perl scripts
+export LANG=en_US.UTF-8
+
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
+
+# Set Oracle NLS parameter
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 # -----
 # Exit silently, if the TEST_BEFORE_RUN command does
@@ -150,17 +172,8 @@ export HOSTNAME
 
 perl test_before_run.pl "$CONF" > /dev/null 2>&1 || exit 2
 
-
 # -----
 # Call the script.
-
-# Set for decimal point, english messages and ISO date representation
-# (for this script execution only).
-# export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
-export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
-export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
-export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
-export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 perl "$SCRIPT" "$CONF" "$@" 
 

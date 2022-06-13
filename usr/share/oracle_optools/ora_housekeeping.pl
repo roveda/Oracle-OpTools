@@ -3,7 +3,7 @@
 # ora_housekeeping.pl - purge old audit entries
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2021, roveda
+# Copyright 2016 - 2022, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -122,6 +122,22 @@
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 #
+# 2021-12-08      roveda      0.16
+#   Added support for multitenant, checking for initialized audit trails and 
+#   initialize them, if not.
+#
+# 2021-12-09      roveda      0.17
+#   Moved 'set feedback off' to beginning of sql command in exec_sql()
+#   and added more NLS settings.
+#   Added 'set serveroutput on' in sql of init_cleanup().
+#
+# 2022-02-03      roveda      0.18
+#   init_cleanup() will not be executed if database is not open (e.g. on DataGuard standby server).
+#
+# 2022-02-10      roveda      0.19
+#   Real numbers are now allowed for KEEP_UNIFIED_AUDIT_ENTRIES_FOR in purge_unified_audit_entries().
+#   Added/changed some informational output in purge_unified_audit_entries().
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -154,7 +170,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 0.15;
+my $VERSION = 0.19;
 
 # ===================================================================
 # The "global" variables
@@ -198,6 +214,11 @@ my %TESTSTEP_DOC;
 # Keeps the complete version of the Oracle software
 # (11.2.0.4.5)
 my $ORACLE_VERSION = "";
+# from 18 on there is a 
+my $ORACLE_VERSION_FULL = "";
+# Oracle version with leading zeroes for comparison
+my $ORACLE_VERSION_3D = "";
+
 # The following variables keep the single release numbers derived from the overall version.
 # 
 # Major Database Release Number: 
@@ -220,14 +241,29 @@ my $ORACLE_VERSION = "";
 # When different platforms require the equivalent patch set, 
 # this digit will be the same across the affected platforms.
 
-my ($ORA_MAJOR_RELNO, $ORA_MAINTENANCE_RELNO, $ORA_APPSERVER_RELNO, $ORA_COMPONENT_RELNO, $ORA_PLATFORM_RELNO);
+my $ORACLE_MAJOR_VERSION = "";
+my $ORACLE_MINOR_VERSION = "";
+
 
 # Database role (PRIMARY/PHYSICAL STANDBY)
 my $ORACLE_DBROLE = "";
 # Database status (OPEN/MOUNTED)
 my $ORACLE_DBSTATUS = "";
 
+# -----
+#  Multitenant 
+#
+# NO/YES if it is a CDB
+my $ORACLE_IS_CDB = "NO"; 
 
+# Keeps the list of all present pdbs (for the current cdb)
+my @PDB_LIST = ();
+# Holds the current pdb name (of @PDB_LIST)
+my $CURRENT_PDB = "";
+my $CURRENT_CON_ID = -1;
+
+
+# -----
 # diagnostic_dest, used for 'set base $DIAG_DEST' in adrci
 my $DIAG_DEST = "";
 
@@ -407,14 +443,29 @@ sub exec_sql {
 
   # Set nls_territory='AMERICA' to get decimal points.
 
+  my $set_container = "";
+  # For PDBs
+  if ( $CURRENT_PDB ) {
+    print "CURRENT_PDB=$CURRENT_PDB\n";
+    $set_container = "alter session set container=$CURRENT_PDB;";
+  }
+
+
   my $sql = "
     set echo off
+    set feedback off
+
     alter session set nls_territory='AMERICA';
+    alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS TZH:TZM';
+
+    $set_container
+
     set newpage 0
     set space 0
     set linesize 32000
     set pagesize 0
-    set feedback off
     set heading off
     set markup html off spool off
 
@@ -434,18 +485,27 @@ sub exec_sql {
     spool off;
   ";
 
-  print "\nexec_sql()\n";
-  print "SQL: $sql\n";
+  print "----- SQL -----\n$sql\n---------------\n\n";
+
+  # -----
+  my $t0 = time;
+
+  print "----- result -----\n";
 
   if (! open(CMDOUT, "| $SQLPLUS_COMMAND")) {
+    print sub_name() . ": Info: execution time:", time - $t0, "s\n";
     output_error_message(sub_name() . ": Error: Cannot open pipe to '$SQLPLUS_COMMAND'. $!");
     return(0);   # error
   }
   print CMDOUT "$sql\n";
   if (! close(CMDOUT)) {
+    print sub_name() . ": Info: execution time:", time - $t0, "s\n";
     output_error_message(sub_name() . ": Error: Cannot close pipe to sqlplus. $!");
     return(0);
   }
+
+  print "------------------\n";
+  print sub_name() . ": Info: execution time:", time - $t0, "s\n";
 
   # -----
   # Print the spool output if a true second parameter is given
@@ -496,7 +556,7 @@ sub clean_up {
   #
   # Remove all left over files at script end.
 
-  title("Cleaning up");
+  title(sub_name());
 
   my @files = @_;
 
@@ -516,6 +576,7 @@ sub clean_up {
 sub send_runtime {
   # The runtime of this script
   # send_runtime(<start_secs> [, {"s"|"m"|"h"}]);
+  title(sub_name());
 
   # Current time minus start time.
   my $rt = time - $_[0];
@@ -566,6 +627,72 @@ sub oracle_available {
     return(0);
   }
 
+  $sql = "select 'from_instance', version from v\$instance;";
+  if (! do_sql($sql)) {return(0)}
+  $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "from_instance", 2));
+  $ORACLE_VERSION_FULL = $ORACLE_VERSION;
+  ($ORACLE_MAJOR_VERSION, $ORACLE_MINOR_VERSION, my $dummy) = split(/\./, $ORACLE_VERSION, 3);
+  $ORACLE_VERSION_3D = join(".", map(sprintf("%03d", $_), split(/\./, $ORACLE_VERSION) ) );
+
+  $sql = "";
+
+  # Only Oracle 18 and later has this column
+  if ($ORACLE_MAJOR_VERSION >= 18) {
+    if ( $sql ) { $sql .= "\n" }
+    $sql .= "select 'oracle version full', version_full FROM v\$instance;";
+  }
+  # Only Oracle 12 and later has this column
+  if ($ORACLE_MAJOR_VERSION >= 12) {
+    if ( $sql ) { $sql .= "\n" }
+    $sql .= "select 'is_cdb', cdb from v\$database;";
+  }
+
+  my $ORACLE_IS_CDB = "NO";
+  if ($sql ) {
+    if (! do_sql($sql)) {return(0)}
+    my $ovf = trim(get_value($TMPOUT1, $DELIM, "oracle version full"));
+    if ( $ovf ) { $ORACLE_VERSION_FULL = $ovf }
+    $ORACLE_IS_CDB = uc(trim(get_value($TMPOUT1, $DELIM, "is_cdb")));
+  }
+
+  # -----
+  if ( $ORACLE_IS_CDB ne 'YES' ) {
+    print "This is not a container database, no pluggable databases.\n";
+    # No error, just leave the sub.
+    return(1);  # ok
+  }
+  # -----------------------------------------------------------------
+
+  # Ok, we got pluggable databases
+  # Leave out the PDB$SEED and any PDBs not 'READ WRITE'
+
+  $sql = "
+    SELECT NAME, CON_ID FROM V\$PDBS 
+    WHERE NAME != 'PDB\$SEED' AND OPEN_MODE = 'READ WRITE'
+    ORDER BY CON_ID;
+  ";
+  if (! do_sql($sql)) {return(0)}
+
+  # -----
+  # Fill the global @PDB_LIST with all pdb names
+
+  my @pdbs;
+  get_value_lines(\@pdbs, $TMPOUT1);
+
+  # Walk over all lines (which are PDBs)
+  # Remember: each line contains a delimiter.
+
+  foreach my $pdb (@pdbs) {
+
+    my @p = split($DELIM, $pdb);
+    @p = map(trim($_), @p);
+    # There is only one PDB per line
+    my ($p, $conid) = @p;
+
+    push(@PDB_LIST, "$p|$conid");
+  }
+
+
   return(1);
 
 } # oracle_available
@@ -574,7 +701,7 @@ sub oracle_available {
 # ===================================================================
 sub purge_audit_entries {
 
-  title("Purge Audit Entries");
+  title(sub_name());
 
   if ($ORACLE_DBSTATUS ne "OPEN") {
     print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
@@ -664,10 +791,57 @@ sub purge_audit_entries {
 } # purge_audit_entries
 
 
+
+# -------------------------------------------------------------------
+sub init_cleanup {
+  # Check, if the audit trail has been initialized.
+  # If not, do so.
+
+  title(sub_name());
+
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
+    return(0);
+  }
+
+  my $sql = "
+    SELECT 'clean_up_interval', count(1) FROM dba_audit_mgmt_config_params
+    where parameter_name = 'DEFAULT CLEAN UP INTERVAL';
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $c = trim(get_value($TMPOUT1, $DELIM, "clean_up_interval"));
+  print "Number of 'DEFAULT CLEAN UP INTERVAL's found: $c\n";
+
+  if ( $c < 1 ) {
+    $sql = "
+      set serveroutput on;
+
+      BEGIN
+        DBMS_AUDIT_MGMT.INIT_CLEANUP(
+           audit_trail_type         => DBMS_AUDIT_MGMT.AUDIT_TRAIL_ALL
+          ,default_cleanup_interval => 240     /* hours */
+          -- ,container => DBMS_AUDIT_MGMT.CONTAINER_CURRENT   /* default  */
+        );
+      END;
+      /
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+  }
+
+  return(1);
+
+} # init_cleanup
+
+
+
 # -------------------------------------------------------------------
 sub purge_unified_audit_entries {
 
-  title("Purge Unified Audit Entries");
+  title(sub_name());
 
   if ($ORACLE_DBSTATUS ne "OPEN") {
     print "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the execution of this section!\n";
@@ -688,8 +862,11 @@ sub purge_unified_audit_entries {
   my $default_keep_for_days = 30;
 
   my $keep_for_days = $CFG{"ORA_HOUSEKEEPING.KEEP_UNIFIED_AUDIT_ENTRIES_FOR"} || $default_keep_for_days;
-  if ( $keep_for_days !~ /\d+/ ) {
-    output_error_message(sub_name() . ": Error: The parameter KEEP_UNIFIED_AUDIT_ENTRIES_FOR is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
+  if ( ($keep_for_days =~ /^\d+\z/) || ($keep_for_days =~ /^-?(?:\d+\.?|\.\d)\d*\z/) ) {
+    # This is an integer or a real number (with decimal point)
+    print "The parameter KEEP_UNIFIED_AUDIT_ENTRIES_FOR ($keep_for_days) is an integer or a real number in the configuration file\n";
+  } else {
+    output_error_message(sub_name() . ": Error: The parameter KEEP_UNIFIED_AUDIT_ENTRIES_FOR ($keep_for_days) is not numeric in the configuration file! The default value of $default_keep_for_days is used.");
     $keep_for_days = $default_keep_for_days;
   }
   print "Keeping the unified audit entries for: $keep_for_days days.\n";
@@ -701,6 +878,7 @@ sub purge_unified_audit_entries {
       unified_auditing varchar(30);
       oldest_entry date;
       keep_for_days number := $keep_for_days;
+      keep_until date;
     BEGIN
       select upper(value) into unified_auditing from v\$option where lower(parameter) = 'unified auditing';
 
@@ -710,15 +888,19 @@ sub purge_unified_audit_entries {
 
         DBMS_AUDIT_MGMT.FLUSH_UNIFIED_AUDIT_TRAIL;
 
+        select SYSTIMESTAMP - keep_for_days into keep_until from dual;
+        dbms_output.put_line('Keep audit entries until: ' || to_char(keep_until, 'yyyy-mm-dd HH24:MI:SS'));
+
         select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
         dbms_output.put_line('OLDEST_ENTRY (before purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
 
-        if oldest_entry < (SYSTIMESTAMP - keep_for_days) then
+        if oldest_entry < keep_until then
+          dbms_output.put_line('There are outdated entries => purge');
 
           -- Set timestamp for oldest audit entry to keep
           DBMS_AUDIT_MGMT.SET_LAST_ARCHIVE_TIMESTAMP(
               audit_trail_type     => DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
-            , last_archive_time    => SYSTIMESTAMP - keep_for_days
+            , last_archive_time    => keep_until
             , CONTAINER => DBMS_AUDIT_MGMT.CONTAINER_CURRENT
           );
 
@@ -727,13 +909,17 @@ sub purge_unified_audit_entries {
               AUDIT_TRAIL_TYPE           =>  DBMS_AUDIT_MGMT.AUDIT_TRAIL_UNIFIED
             , USE_LAST_ARCH_TIMESTAMP    =>  TRUE
           );
-        ELSE
-          dbms_output.put_line('No audit entries found older than ' || to_char(keep_for_days) || ' days (' || to_char(SYSTIMESTAMP - keep_for_days, 'yyyy-mm-dd HH24:MI:SS') || ').');
-        END IF;
-      END IF;
 
-        select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
-        dbms_output.put_line('OLDEST_ENTRY (after purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
+          select min(EVENT_TIMESTAMP) into oldest_entry from UNIFIED_AUDIT_TRAIL;
+          dbms_output.put_line('OLDEST_ENTRY (after purge): ' || to_char(oldest_entry, 'yyyy-mm-dd HH24:MI:SS'));
+
+        ELSE
+          dbms_output.put_line('No audit entries found older than ' || to_char(keep_until, 'yyyy-mm-dd HH24:MI:SS') );
+        END IF;
+
+      ELSE
+        dbms_output.put_line('Unified Auditing is not activated');
+      END IF;
 
     END;
     /
@@ -1181,6 +1367,10 @@ $d =~ s/\d{1}$/0/;
 
 set_uls_timestamp($d);
 
+# The section will be dynamically changed for PDBs
+# (if any are present)
+my $uls_section = "";
+
 # uls_show();
 
 # ---- Send name of this script and its version
@@ -1261,7 +1451,45 @@ adrci_purge();
 
 purge_audit_entries();
 
+init_cleanup();
+
 purge_unified_audit_entries();
+
+# CDB/PDB
+
+if ($#PDB_LIST >= 0) {
+  # Remember: $#ARRAY returns the max index of the array, which starts at zero!
+
+  title("Database Instance is a CDB and has PDBs");
+
+  print "List of PDBs and CON_IDs: ", join(",", @PDB_LIST), "\n";
+
+  foreach my $p (@PDB_LIST ) {
+    ($CURRENT_PDB, $CURRENT_CON_ID) = split('\|', $p);
+
+    title("PDB: $CURRENT_PDB");
+
+    print "p=$p, CURRENT_PDB=$CURRENT_PDB, CURRENT_CON_ID=$CURRENT_CON_ID\n";
+    my $pdb_lc = lc($CURRENT_PDB);
+
+    # $uls_section = $CFG{"ULS.ULS_SECTION_PDB"} ;
+    # ULS_SECTION_PDB = Oracle DB [%%ORACLE_SID%% -> __PDB_NAME__]
+    # vi /etc/uls/oracle/standard.conf
+
+    # $uls_section =~ s/__PDB_NAME__/$pdb_lc/g;
+
+    # print "Setting ULS_SECTION to: $uls_section\n";
+
+    # set_uls_section($uls_section);
+
+    init_cleanup();
+
+    purge_unified_audit_entries();
+
+  } # foreach
+
+} # has pdbs
+
 
 # -----
 # Continue here with more tests.
@@ -1350,7 +1578,7 @@ runtime:
 #   proper execution of this script.
 # 
 
-Copyright 2016 - 2020, roveda
+Copyright 2016 - 2021, roveda
 
 This file is part of Oracle OpTools.
 

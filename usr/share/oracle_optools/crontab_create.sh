@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # crontab_create.sh - create a default crontab file for the Oracle OpTools
 #
 # ---------------------------------------------------------
-# Copyright 2017 - 2018, roveda
+# Copyright 2017-2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -106,13 +106,20 @@
 # 2018-04-18      roveda      0.16
 #   Added entry for nightly_performance_reports.sh (extracted from nightly.sh).
 #
+# 2021-12-02      roveda      0.17
+#
 # -----------------------------------------------------------------------------
+
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
+. ./ooFunctions
 
 USAGE="crontab_create.sh  <oracle_environment_script>  <destination_dir>  [ SILENT ]"
 
 
 if [ $EUID -ne 0 ]; then
-   echo "$0: ERROR: This script can only be run as root => ABORTING"
+   echoerr "$0: ERROR: This script can only be run as root => ABORTING"
    exit 1
 fi
 
@@ -120,8 +127,8 @@ fi
 # Check number of arguments
 
 if [[ $# -lt 2 ]] ; then
-  echo "ERROR: Wrong number of command line parameters => ABORTING"
-  echo "$USAGE"
+  echoerr "ERROR: Wrong number of command line parameters => ABORTING"
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -130,14 +137,14 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "ERROR: environment script '$ORAENV' not found => ABORTING"
+  echoerr "ERROR: environment script '$ORAENV' not found => ABORTING"
   exit 1
 fi
 
 . "$ORAENV"
 if [[ -z "$ORACLE_SID" ]] ; then
   echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   echo
   exit 1
 fi
@@ -149,17 +156,15 @@ DESTDIR="$2"
 if [ -d "$DESTDIR" ] && [ -x "$DESTDIR" ] && [ -w "$DESTDIR" ] ; then
   :
 else
-  echo
-  echo "ERROR: Cannot access or write to directory '$DESTDIR' => ABORTING"
-  echo
+  echoerr "ERROR: Cannot access or write to directory '$DESTDIR' => ABORTING"
   exit 1
 fi
 
 # -----
 # silent?
 
-SILENT="$3"
-SILENT=$(echo $SILENT | tr [[:lower:]] [[:upper:]])
+SILENT="${3^^}"
+# SILENT=$(echo $SILENT | tr [[:lower:]] [[:upper:]])
 
 if [[ "$SILENT" == 'SILENT' ]] ; then
   SILENT="yes"
@@ -169,7 +174,8 @@ fi
 SID=$(echo $ORACLE_SID | awk '{print toupper($0)}')
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 # -----
 # hour, 21..25 (21, 22, 23, 00, 01), for backup_database
@@ -269,15 +275,5 @@ if [ "$SILENT" != "yes" ] ; then
   echo
 fi
 
-# This is obsolete:
-# -----
-# copy command
-#
-#if [ "$SILENT" != "yes" ] ; then
-#  echo
-#  echo "Copy it as root:"
-#  echo
-#  echo "cp \"$CRONFILE\" /etc/cron.d/"
-#  echo
-#fi
+exit 0
 

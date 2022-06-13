@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # backup_database.sh - backup the database regularly
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016-2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -74,35 +74,42 @@
 # 2021-04-22      roveda      0.05
 #   Exit value of backup script is used as exit value of this script.
 #
+# 2021-12-02      roveda      0.06
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#
+# 2021-12-08      roveda      0.07
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
+#
 # ---------------------------------------------------------
 
 
-
 # Go to directory where this script is placed
-cd $(dirname $0)
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
-. /usr/share/oracle_optools/ooFunctions
+. ./ooFunctions
 
 # -----
 # Set environment
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => abort"
   exit 1
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 1
 fi
 
 unset LC_ALL
-export LANG=C
-
+# export LANG=C
+export LANG=en_US.UTF-8
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
 
 # -----
 # Check if database backup is turned off
@@ -162,6 +169,16 @@ esac
 
 # Execute the RMAN commands of section [ORARMAN] and parameter LEVEL0
 # (or use the given second command line parameter as parameter)
+
+# -----
+# Set LANG explicitly to be used in the Perl scripts
+export LANG=en_US.UTF-8
+
+# Set Oracle NLS parameter
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 ./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf  $ROLEPARAMETER
 retval=$?

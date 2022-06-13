@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # nightly.sh - execute scripts each night
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2018, roveda
+# Copyright 2016-2018, 2021, 2022, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -59,12 +59,27 @@
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2021-12-02      roveda      0.03
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
+#
+# 2021-12-08      roveda      0.04
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
+#
+# 2022-03-25      roveda      0.05
+#   Find the adump directory and remove all *.aud files older than 8 days.
+#   Remove left over temporary files in /tmp if older than 3 days.
+#
 #
 # ---------------------------------------------------------
 
 
 # Go to directory where this script is placed
-cd `dirname $0`
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
+. ./ooFunctions
 
 # -----
 # Set environment
@@ -72,20 +87,27 @@ cd `dirname $0`
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => abort"
   exit 1
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 1
 fi
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
+
+# Set Oracle NLS parameter
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 # -----
 # Generate a database configuration report
@@ -113,6 +135,13 @@ export LANG=C
 
 find /oracle/admin/$ORACLE_SID/?dump -follow -type f -mtime +10 -exec rm {} \; > /dev/null 2>&1
 
+# Find adump in directory below /db
+for d in $(find /db -type d -name adump) ; do
+  # Purge files older than 8 days
+  # also in sub-directories
+  find $d -type f -mtime +8 -name "*.aud" -delete
+done
+
 
 # -----
 # Remove old archived redo logs
@@ -135,4 +164,9 @@ find /oracle/admin/$ORACLE_SID/connection_protocol -name "prot_*" -follow -type 
 # Remove *.tmp files from current directory
 
 find . -follow -type f -name "*.tmp" -mtime +10 -exec rm {} \; > /dev/null 2>&1
+
+# -----
+# Remove old temporary files that are left over
+
+find /tmp -maxdepth 1 -user oracle -type f -mtime +3 -name "tmp.*" -delete
 

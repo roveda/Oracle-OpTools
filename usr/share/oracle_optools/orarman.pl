@@ -3,7 +3,7 @@
 # orarman.pl - makes an online backup of an oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2008 - 2021, roveda
+# Copyright 2008 - 2022, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -154,6 +154,13 @@
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 #
+# 2022-01-16      roveda      0.29
+#   Send all networker environment variables (NSR_*) to ULS as further 
+#   information (only if present).
+#
+# 2022-01-28      roveda      0.30
+#   Fixed: the networker environment variables were not sent to ULS.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -187,7 +194,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 0.28;
+my $VERSION = 0.30;
 
 # ===================================================================
 # The "global" variables
@@ -467,14 +474,27 @@ sub exec_sql {
   # connect / as sysdba
 
   my $sql = "
+    set echo off
+    set feedback off
+
+    alter session set NLS_TERRITORY='AMERICA';
+    alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS TZH:TZM';
+
     set newpage 0
     set space 0
-    set linesize 10000
+    set linesize 32000
     set pagesize 0
-    set echo off
     set feedback off
     set heading off
     set markup html off spool off
+
+    set trimout on;
+    set trimspool on;
+    set serveroutput off;
+    set define off;
+    set flush off;
 
     set numwidth 20
     set colsep '$DELIM'
@@ -486,8 +506,9 @@ sub exec_sql {
     spool off;
   ";
 
-  print "\nexec_sql(): SQL:\n";
-  print "$sql\n";
+  print "----- SQL -----\n$sql\n---------------\n\n";
+
+  print "----- result -----\n";
 
   if (! open(CMDOUT, "| $SQLPLUS_COMMAND")) {
     output_error_message(sub_name() . ": Error: Cannot open pipe to sqlplus. $!");
@@ -498,6 +519,7 @@ sub exec_sql {
     output_error_message(sub_name() . ": Error: Cannot close pipe to sqlplus. $!");
     return(0);
   }
+  print "------------------\n";
 
   reformat_spool_file($TMPOUT1);
 
@@ -938,14 +960,26 @@ sub rman_backup {
   # -----
   # Networker special
   # Extract some networker environment variables, if set.
+  # 2022-01-16: extract all networker environment variabls, if present
+
 
   my $nsrenv = "";
-  if ($ENV{"NSR_SERVER"}) { $nsrenv = "NSR_SERVER=" . $ENV{"NSR_SERVER"} }
-  if ($ENV{"NSR_DATA_VOLUME_POOL"}) { $nsrenv .= "\nNSR_DATA_VOLUME_POOL=" . $ENV{"NSR_DATA_VOLUME_POOL"} }
+  # if ($ENV{"NSR_SERVER"}) { $nsrenv = "NSR_SERVER=" . $ENV{"NSR_SERVER"} }
+  # if ($ENV{"NSR_DATA_VOLUME_POOL"}) { $nsrenv .= "\nNSR_DATA_VOLUME_POOL=" . $ENV{"NSR_DATA_VOLUME_POOL"} }
+  # if ($nsrenv) {
+  #   uls_value($IDENTIFIER, "networker environment", $nsrenv, "_");
+  # }
+
+  foreach my $k ( keys %ENV ) {
+    if ( $k =~ /^NSR_/ ) {
+      # print "$k=$ENV{$k}\n";
+      if ( $nsrenv ) { $nsrenv = "$nsrenv\n"; }
+      $nsrenv="$nsrenv$k=$ENV{$k}";
+    }
+  }
   if ($nsrenv) {
     uls_value($IDENTIFIER, "networker environment", $nsrenv, "_");
   }
-
 
   # -----
   # Output to temporary command file

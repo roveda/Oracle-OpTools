@@ -179,6 +179,9 @@
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 # 
+# 2021-12-09      roveda      0.33
+#   Moved 'set feedback off' to beginning of sql command in exec_sql()
+#   and added more NLS settings.
 #
 #   Change also $VERSION later in this script!
 #
@@ -211,7 +214,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 0.32;
+my $VERSION = 0.33;
 
 # ===================================================================
 # The "global" variables
@@ -419,11 +422,17 @@ sub exec_sql {
 
   my $sql = "
     set echo off
+    set feedback off
+
+    alter session set NLS_TERRITORY='AMERICA';
+    alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS TZH:TZM';
+
     set newpage 0
     set space 0
     set linesize 32000
     set pagesize 0
-    set feedback off
     set heading off
     set markup html off spool off
 
@@ -443,8 +452,9 @@ sub exec_sql {
     spool off;
   ";
 
-  print "\nexec_sql(): SQL:\n";
-  print "$sql\n";
+  print "----- SQL -----\n$sql\n---------------\n\n";
+
+  print "----- result -----\n";
 
   if (! open(CMDOUT, "| $SQLPLUS_COMMAND")) {
     output_error_message(sub_name() . ": Error: Cannot open pipe to sqlplus. $!");
@@ -455,6 +465,7 @@ sub exec_sql {
     output_error_message(sub_name() . ": Error: Cannot close pipe to sqlplus. $!");
     return(0);
   }
+  print "------------------\n";
 
   reformat_spool_file($TMPOUT1);
 

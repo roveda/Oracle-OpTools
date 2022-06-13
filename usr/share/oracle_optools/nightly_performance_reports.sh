@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # nightly_performance_reports.sh - execute performance report scripts each night
 #
 # ---------------------------------------------------------
-# Copyright 2018, roveda
+# Copyright 2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -55,12 +55,22 @@
 # 2018-04-18      roveda      0.01
 #   Extracted from nightly.sh
 #
+# 2021-12-02      roveda      0.02
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
+#
+# 2021-12-08      roveda      0.03
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
 #
 # ---------------------------------------------------------
 
 
 # Go to directory where this script is placed
-cd `dirname $0`
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
+. ./ooFunctions
 
 # -----
 # Set environment
@@ -68,20 +78,27 @@ cd `dirname $0`
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => abort"
   exit 1
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 1
 fi
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
+
+# Set Oracle NLS parameter
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 # -----
 # Generate a daily report of the database statspack performance snapshots

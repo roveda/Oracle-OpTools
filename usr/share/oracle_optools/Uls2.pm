@@ -2,7 +2,7 @@
 # Uls2.pm  -  a perl module to generate value files to be processed by the ULS server
 #
 # ---------------------------------------------------------
-# Copyright 2004-2021, roveda
+# Copyright 2004-2022, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -166,6 +166,9 @@
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 #
+# 2022-02-20, 1.18, roveda
+#   Added encoding guessing to file reading in uls_send_file_contents().
+#
 #
 # Change $VERSION later in the script!
 #
@@ -192,9 +195,18 @@ use Unicode::Normalize  qw< NFD NFC >;
 # Yes, I am
 package Uls2;
 
+# -----------------------------------------------------------------------------
+# For guessing the encoding of file lines
+# (local to package)
+
+use Encode::Guess;
+use Encode   qw< encode decode from_to >;
+
+# -----------------------------------------------------------------------------
 # This always throws a warning and clutters the mail
 # use 5.8.0;
 
+# -----------------------------------------------------------------------------
 our(@ISA, @EXPORT, $VERSION);
 require Exporter;
 
@@ -202,7 +214,7 @@ require Exporter;
 
 @EXPORT = qw(set_uls_hostname set_uls_section set_uls_timestamp uls_counter uls_doc uls_file uls_flush uls_get_last_values uls_image uls_init uls_nvalues uls_nvalues_nodup uls_nvalues_unique uls_send_file_contents uls_server_doc uls_show uls_settings uls_teststep_doc uls_timing uls_value uls_value_nodup uls_value_unique);
 
-$VERSION = 1.17;
+$VERSION = 1.18;
 
 # ----------------------------------------------------------------
 # Perl modules
@@ -1252,6 +1264,38 @@ sub uls_timing {
 
 
 # ------------------------------------------------------------
+sub find_codec {
+
+  my $str = $_[0];
+
+  # Check defaults
+  # Default encodings contain (as of 2021-12-01), in that sequence:
+  #   ascii  ascii-ctrl  cp1252  iso-8859-1  null  UCS-2BE  UCS-2LE
+  #   UTF-16  UTF-16BE  UTF-16LE  UTF-32  UTF-32BE  UTF-32LE
+  #   utf-8-strict  utf8
+
+  my $decoder = Encode::Guess->guess($str);
+  if ( ref($decoder) ) { return($decoder->name) }
+
+  print "No matching decoder found in default encodings, check additional.\n";
+
+  my @additional_encodings = ('iso-8859-15', 'iso-8859-1', 'iso-8859-2', 'iso-8859-3', 'iso-8859-4');
+  # Check some more if nothing found
+  foreach my $suspect (@additional_encodings) {
+    print "Check encoding $suspect\n";
+    $decoder = guess_encoding($str, $suspect);
+    if ( ref($decoder) ) { return($decoder->name) }
+  }
+
+  # If no encoding matches
+  print "Still no matching decoder found in encodings.\n";
+  return(undef);
+
+} # find_codec
+
+
+
+# ------------------------------------------------------------
 sub uls_send_file_contents  {
   #   uls_send_file_contents(<teststep>, <detail>, <filename> [, <timestamp>])
   # or
@@ -1309,7 +1353,8 @@ sub uls_send_file_contents  {
   if ($stop_line) { print "Stopping output at line: $stop_line.\n" }
   else            { print "Stopping output at end of file.\n" }
 
-  if (! open(F, "<", $filename)) {
+  # if (! open(F, "<", $filename)) {
+  if (! open(F, "<:raw", $filename)) {
     print STDERR sub_name() . ": Error: Cannot open $filename for reading. $!\n";
     return(0);
   }
@@ -1336,6 +1381,19 @@ sub uls_send_file_contents  {
   while($L = <F>) {
     $LC ++;
     if (($LC >= $start_line) and ($LC <= $stop_line or $stop_line == 0)) {
+
+      # -----
+      # Guess encoding
+      my $enc = find_codec($L);
+      if ($enc !~ /ascii/i) {
+        my $destenc = 'latin1';
+        print "Changing encoding from guessed '$enc' to '$destenc'\n";
+        if ( ! Encode::from_to($L, $enc, $destenc) ) {
+          print STDERR sub_name() . ": Error: Cannot convert [$L] from '$enc' to '$destenc'\n";
+        }
+      }
+
+      # -----
       chomp($L);
 
       if (length($txt . $L) > $MAX_VALUE_LENGTH) {

@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # instance_start.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2019, roveda
+# Copyright 2016-2019, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -74,13 +74,20 @@
 # 2019-07-03      roveda      0.03
 #   Now supporting Data Guard Standby databases. Starting up only in MOUNTED.
 #
+# 2021-12-02      roveda      0.04
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
+#
 # ---------------------------------------------------------
 
 USAGE="instance_start.sh  <oracle_environment_script>  { <listener_name> | DEFAULT | NONE }"
 
 # -----
 # Go to directory where this script is placed
-cd $(dirname $0)
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
 . ./ooFunctions
 
 # -------------------------------------------------------------------
@@ -93,7 +100,7 @@ STARTED=$(date +"%Y-%m-%d")
 # Check number of arguments
 
 if [[ $# -ne 2 ]] ; then
-  echo "$USAGE"
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -103,21 +110,21 @@ fi
 ORAENV=$(eval "echo $1")
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => abort"
   exit 2
 fi
 
 . $ORAENV
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  echo
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 
 # -----
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
+
 
 # -----
 # HOSTNAME is used, but may not be set in cronjobs
@@ -131,12 +138,11 @@ export HOSTNAME
 title "Starting Oracle Listener"
 
 LISTENER_NAME="$2"
-
-UC_LISTENER_NAME=$(echo $LISTENER_NAME | tr [[:lower:]] [[:upper:]])
+UC_LISTENER_NAME=${LISTENER_NAME^^}
 
 case $UC_LISTENER_NAME in
   NONE)
-    echo "No listener is started!"
+    infobox "INFO:" "No listener is started!"
     ;;
   DEFAULT)
     # If 'DEFAULT' has been given as listener name, 
@@ -146,9 +152,9 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl start
     if [ $? -ne 0 ] ; then
-      echo "WARNING: Cannot start the default listener!"
+      infobox "WARNING:" "Cannot start the default listener!"
     else
-      echo "INFO: Successfully started the default listener."
+      infobox "INFO:" "Successfully started the default listener."
     fi
     ;;
   *)
@@ -157,9 +163,9 @@ case $UC_LISTENER_NAME in
     echo
     lsnrctl start $LISTENER_NAME
     if [ $? -ne 0 ] ; then
-      echo "WARNING: Cannot start the non-default listener '$LISTENER_NAME'!"
+      infobox "WARNING:" "Cannot start the non-default listener '$LISTENER_NAME'!"
     else
-      echo "INFO: Successfully started the non-default listener '$LISTENER_NAME'."
+      infobox "INFO:" "Successfully started the non-default listener '$LISTENER_NAME'."
     fi
     ;;
 esac
@@ -171,13 +177,8 @@ title "Starting Oracle Database Server"
 
 echo "ORACLE_HOME=$ORACLE_HOME"
 echo "ORACLE_SID=$ORACLE_SID"
-echo
-echo "+------------------------------------------------------------+"
-echo "|                                                            |"
-echo "| Performing a STARTUP MOUNT, this may take a while...       |"
-echo "|                                                            |"
-echo "+------------------------------------------------------------+"
-echo
+
+infobox "INFO:" "Performing a STARTUP MOUNT, this may take a while..."
 
 # -----
 # STARTUP MOUNT
@@ -189,11 +190,11 @@ sql_exec "STARTUP MOUNT"
 
 OPENMODE=$(sql_value "SELECT STATUS FROM V\$INSTANCE;")
 if [[ "$OPENMODE" != "MOUNTED" ]] ; then
-  echo
-  echo "================================================================"
-  echo "ERROR: Database is not 'MOUNTED'! Shutting down..."
+
+  errorbox "ERROR:" "Database is not 'MOUNTED'! Shutting down..."
+
   sql_exec "SHUTDOWN IMMEDIATE"
-  echo "================================================================"
+
   title "Aborted"
   exit 1
 fi
@@ -205,32 +206,27 @@ fi
 DBROLE=$(sql_value "SELECT DATABASE_ROLE FROM V\$DATABASE;")
 
 if [[ "$DBROLE" == "PRIMARY" ]] ; then
-  echo
-  echo "+-------------------------------------------------------------+"
-  echo "|                                                             |"
-  echo "| Performing an ALTER DATABASE OPEN, this may take a while... |"
-  echo "|                                                             |"
-  echo "+-------------------------------------------------------------+"
-  echo
+
+  infobox "INFO:" "Performing an ALTER DATABASE OPEN, this may take a while..."
+
   sql_exec "ALTER DATABASE OPEN;"
 
   # Check for READ WRITE
 
   OPENMODE=$(sql_value "SELECT STATUS FROM V\$INSTANCE;")
   if [[ "$OPENMODE" != "OPEN" ]] ; then
-    echo
-    echo "================================================================"
-    echo "ERROR: Database is not 'OPEN'! Shutting down..."
+
+    errorbox "ERROR:" "Database is not 'OPEN'! Shutting down..."
+
     sql_exec "SHUTDOWN IMMEDIATE"
-    echo "================================================================"
+
     title "Aborted"
     exit 1
   fi
 fi
 
-echo
-echo "SUCCESS: Database '$ORACLE_SID' is '$OPENMODE', database role '$DBROLE'."
-echo
+infobox "SUCCESS:" "Database '$ORACLE_SID' is '$OPENMODE', database role '$DBROLE'."
+
 title "Oracle Database Server started"
 
 title "Finished"

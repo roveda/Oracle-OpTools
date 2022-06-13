@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # ora_dbinfo.sh
 #
 # ---------------------------------------------------------
-# Copyright 2017 - 2018, roveda
+# Copyright 2017-2018, 2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -61,9 +61,20 @@
 #   Changed check for successful sourcing the environment to [[ -z "$ORACLE_SID" ]]
 #   instead of [ $? -ne 0 ] (what does not work).
 #
+# 2021-12-02      roveda      0.03
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#   Using new box functions from ooFunctions
+#
+# 2021-12-08      roveda      0.04
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
 #
 # ===================================================================
 
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
+
+. ./ooFunctions
 
 USAGE="ora_dbinfo.sh  [ <oracle_environment_script> ] "
 
@@ -75,10 +86,8 @@ SCRIPT=ora_dbinfo.pl
 
 # unset language variables
 unset LC_ALL
-export LANG=C
-
-# Go to directory where this script is located
-cd $(dirname $0)
+# export LANG=C
+export LANG=en_US.UTF-8
 
 # -----
 # Check, if ORACLE_SID is set in current environment
@@ -88,7 +97,8 @@ if [[ -z "$ORACLE_SID" ]] ; then
   # If not set, you MUST have given a parameter
 
   if [[ $# -lt 1 ]] ; then
-    echo "$USAGE"
+    echoerr "ERROR: You must provide an Oracle environment script as parameter => aborting script"
+    echoerr "$USAGE"
     exit 1
   fi
   ORAENV=$(eval "echo $1")
@@ -103,14 +113,13 @@ fi
 # Set environment
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => abort"
+  echoerr "Error: environment script '$ORAENV' not found => aborting script"
   exit 2
 fi
 
 . "$ORAENV"
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 
@@ -123,6 +132,18 @@ export HOSTNAME
 # Remember to include the directory where flush_test_values can
 # be found ('/usr/bin' or '/usr/local/bin') in the PATH.
 
+# -----
+# Set LANG explicitly to be used in the Perl scripts
+export LANG=en_US.UTF-8
+
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
+
+# Set Oracle NLS parameter
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
 
 # -----
 # Exit, if the TEST_BEFORE_RUN command does
@@ -131,19 +152,13 @@ export HOSTNAME
 if perl test_before_run.pl "$CONF" > /dev/null 2>&1 ; then
   :
 else
-  echo "The test before run check was not successful => abort"
+  echoerr "The test before run check was not successful => abort"
   exit 3
 fi
 
 
 # -----
 # Call the script.
-
-# Set for decimal point, english messages and ISO date representation
-# (for this script execution only).
-# export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
-export NLS_LANG=AMERICAN_AMERICA.UTF8
-export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
 
 perl "$SCRIPT" "$CONF"
 

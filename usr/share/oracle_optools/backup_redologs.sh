@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # backup_redologs.sh - backup the redo logs regularly
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2019, roveda
+# Copyright 2016-2019,2021, roveda
 #
 # This file is part of the 'Oracle OpTools'.
 #
@@ -67,14 +67,22 @@
 # 2021-04-22      roveda      0.04
 #   Exit value of redo log backup is used as exit value of this script.
 #
+# 2021-12-02      roveda      0.05
+#   Get current directory thru 'readlink'.
+#   Set LANG=en_US.UTF-8
+#
+# 2021-12-08      roveda      0.06
+#   unset ORACLE_PATH and SQLPATH to prohibit processing of login.sql
+#
 #
 # ---------------------------------------------------------
 
 
 # Go to directory where this script is placed
-cd $(dirname $0)
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
-. /usr/share/oracle_optools/ooFunctions
+. ./ooFunctions
 
 # -----
 # Set environment
@@ -90,7 +98,10 @@ if [[ -z "$ORACLE_SID" ]] ; then
 fi
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
+# Prohibit the reading of a possible login.sql
+unset ORACLE_PATH SQLPATH
 
 # -----
 # Check the role and status of the database
@@ -111,8 +122,17 @@ case $ROLESTAT in
 esac
 
 # -----
+# Set LANG explicitly to be used in the Perl scripts
+export LANG=en_US.UTF-8
+
+# Set Oracle NLS parameter
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
+export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
+
+# -----
 # Backup the redo log and archived redo logs
-#
 
 # Try again, if first execution fails.
 C=1
@@ -123,13 +143,13 @@ while [ 1 ]; do
   # Leave the loop, if successful.
   ./run_perl_script.sh $ORAENV orarman.pl  /etc/oracle_optools/standard.conf $ROLEPARAMETER
   retval=$?
-  if [ $retval -eq 0 ] ; then
+  if (( $retval == 0 )) ; then
     break
   fi
 
   # Continue the loop if the script has failed, 
   # but bail out after the second try.
-  if [ $C -ge 2 ] ; then
+  if (( $C > 2 )) ; then
     break
   fi
 

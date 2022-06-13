@@ -3,7 +3,7 @@
 #   ora_dbinfo.pl - collect information about an Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2011 - 2021, roveda
+# Copyright 2011 - 2022, roveda
 #
 # This file is part of Oracle OpTools.
 #
@@ -251,6 +251,20 @@
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 #
+# 2021-12-09      roveda      0.50
+#   Moved 'set feedback off' to beginning of sql command in exec_sql()
+#   and added more NLS settings.
+#
+# 2022-03-28      roveda      0.51
+#   Added online_status in datafiles(), table heading is adjusted 
+#   depending on the processed file types (data / temp).
+#
+# 2022-03-31      roveda      0.52
+#   Omit some PDB information if it is a standby PDB (the CDB is a standby)
+#
+# 2022-05-07      roveda      0.53
+#   Added COMP_ID to the list of components.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -284,7 +298,7 @@ use Misc 0.44;
 use Uls2 1.17;
 use HtmlDocument;
 
-my $VERSION = 0.49;
+my $VERSION = 0.53;
 
 # ===================================================================
 # The "global" variables
@@ -696,14 +710,18 @@ sub exec_sql {
 
   my $sql = "
     set echo off
-    alter session set nls_territory='AMERICA';
+    set feedback off
+
+    alter session set NLS_TERRITORY='AMERICA';
+    alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS TZH:TZM';
 
     $set_container
     set newpage 0
     set space 0
     set linesize 32000
     set pagesize 0
-    set feedback off
     set heading off
     set markup html off spool off
 
@@ -723,8 +741,9 @@ sub exec_sql {
     spool off;
   ";
 
-  print "\nexec_sql()\n";
-  print "SQL: $sql\n";
+  print "----- SQL -----\n$sql\n---------------\n\n";
+
+  print "----- result -----\n";
 
   if (! open(CMDOUT, "| $SQLPLUS_COMMAND")) {
     output_error_message(sub_name() . ": Error: Cannot open pipe to '$SQLPLUS_COMMAND'. $!");
@@ -735,6 +754,8 @@ sub exec_sql {
     output_error_message(sub_name() . ": Error: Cannot close pipe to sqlplus. $!");
     return(0);
   }
+  print "------------------\n";
+
 
   # -----
   # Print the spool output if a true second parameter is given
@@ -1946,7 +1967,7 @@ resetlogs id: Branch ID for the incarnation of the current row (used by user-man
   if ($ORACLE_DBSTATUS eq "OPEN") {
     $sql = "
       select
-        COMP_NAME, VERSION, STATUS,
+        COMP_ID, COMP_NAME, VERSION, STATUS,
         to_char(to_date(MODIFIED, 'DD-MON-YYYY HH24:MI:SS'), 'YYYY-MM-DD HH24:MI:SS')
       from dba_registry
       order by COMP_NAME
@@ -1969,10 +1990,10 @@ resetlogs id: Branch ID for the incarnation of the current row (used by user-man
     # - report
 
     # prepend a title line
-    unshift(@L, "component  $DELIM  version  $DELIM  status  $DELIM  last modified");
+    unshift(@L, "component_id  $DELIM  component  $DELIM  version  $DELIM  status  $DELIM  last modified");
 
     $HtmlReport->add_heading(2, "Components", "_default_");
-    $HtmlReport->add_table(\@L, $DELIM, "LLLL", 1);
+    $HtmlReport->add_table(\@L, $DELIM, "LLLLL", 1);
     $HtmlReport->add_goto_top("top");
   } else {
     $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS do not allow the evaluation of this section!");
@@ -2535,6 +2556,9 @@ sub datafiles {
 
   my $sql;
 
+  my $tabtitle = "data file $DELIM size [MB] $DELIM max size [MB] $DELIM status $DELIM  online status $DELIM autoextensible";
+  my $tabtitlealign = "LRRLLL";
+
   if ($contents eq "TEMPORARY") {
 
     $sql = "
@@ -2548,6 +2572,9 @@ sub datafiles {
       where upper(tablespace_name) = upper('$ts')
       order by file_id;
     ";
+
+    $tabtitle = "temp file $DELIM size [MB] $DELIM max size [MB] $DELIM status $DELIM  autoextensible";
+    $tabtitlealign = "LRRLL";
 
   } else {
 
@@ -2571,9 +2598,9 @@ sub datafiles {
   get_value_lines(\@DF, $TMPOUT1);
 
   # prepend a title line
-  unshift(@DF, "data file $DELIM size [MB] $DELIM max size [MB] $DELIM status $DELIM autoextensible");
+  unshift(@DF, $tabtitle);
 
-  $HtmlReport->add_table(\@DF, $DELIM, "LRRLL", 1);
+  $HtmlReport->add_table(\@DF, $DELIM, $tabtitlealign, 1);
 
 } # datafiles
 
@@ -3243,6 +3270,10 @@ sub part_1_pdb {
 
   $HtmlReport->set_local_anchor_list();
 
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $HtmlReport->add_paragraph('p', "Database role $ORACLE_DBROLE and status $ORACLE_DBSTATUS only allow the restricted evaluation of this section!");
+  }
+
   # -----
   $sql = "select 'oracle version', version from v\$instance;";
 
@@ -3264,11 +3295,19 @@ sub part_1_pdb {
   }
 
   # -----
-  $sql = "
-    select 'cdb', host_name, instance_name from v\$instance;
-    select 'pdb1', con_id, name, dbid, TO_CHAR(CREATION_TIME,'YYYY-MM-DD HH24:MI:SS'), open_mode, max_size, to_char(open_time, 'YYYY-MM-DD HH24:MI:SS') from v\$pdbs;
-    select 'pdb2', force_logging, refresh_mode, REFRESH_INTERVAL, guid, status from dba_pdbs;
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    $sql = "
+      select 'cdb', host_name, instance_name from v\$instance;
+      select 'pdb1', con_id, name, dbid, TO_CHAR(CREATION_TIME,'YYYY-MM-DD HH24:MI:SS'), open_mode, max_size, to_char(open_time, 'YYYY-MM-DD HH24:MI:SS') from v\$pdbs;";
+
+  } else {
+
+    $sql = "
+      select 'cdb', host_name, instance_name from v\$instance;
+      select 'pdb1', con_id, name, dbid, TO_CHAR(CREATION_TIME,'YYYY-MM-DD HH24:MI:SS'), open_mode, max_size, to_char(open_time, 'YYYY-MM-DD HH24:MI:SS') from v\$pdbs;
+      select 'pdb2', force_logging, refresh_mode, REFRESH_INTERVAL, guid, status from dba_pdbs;
   ";
+  }
 
   if (! do_sql($sql)) {return(0)}
 
@@ -3283,12 +3322,18 @@ sub part_1_pdb {
   my $my_max_size  = trim(get_value($TMPOUT1, $DELIM, "pdb1", 7));
   my $my_open_time = trim(get_value($TMPOUT1, $DELIM, "pdb1", 8));
 
+  my ($my_force_log, $my_refresh_mode, $my_refresh_int, $my_guid, $my_status) = ("unknown", "unknown", "unknown", "unknown", "unknown");
 
-  my $my_force_log    = trim(get_value($TMPOUT1, $DELIM, "pdb2", 2));
-  my $my_refresh_mode = trim(get_value($TMPOUT1, $DELIM, "pdb2", 3));
-  my $my_refresh_int  = trim(get_value($TMPOUT1, $DELIM, "pdb2", 4));
-  my $my_guid         = trim(get_value($TMPOUT1, $DELIM, "pdb2", 5));
-  my $my_status       = trim(get_value($TMPOUT1, $DELIM, "pdb2", 6));
+  if ($ORACLE_DBSTATUS ne "OPEN") {
+    # leave all values to 'unknown'
+    print "Values from dba_pds are not available\n";
+  } else {
+    $my_force_log    = trim(get_value($TMPOUT1, $DELIM, "pdb2", 2));
+    $my_refresh_mode = trim(get_value($TMPOUT1, $DELIM, "pdb2", 3));
+    $my_refresh_int  = trim(get_value($TMPOUT1, $DELIM, "pdb2", 4));
+    $my_guid         = trim(get_value($TMPOUT1, $DELIM, "pdb2", 5));
+    $my_status       = trim(get_value($TMPOUT1, $DELIM, "pdb2", 6));
+  }
 
   # $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
   # # e.g. 10.1.0.3.0, 10.2.0.3.0
@@ -3333,6 +3378,8 @@ sub part_1_pdb {
     , "Refresh mode         ! $my_refresh_mode"
     , "CDB instance name    ! $my_cdb_name"
     , "Running on host      ! $my_hostname"
+    , "CDB database status  ! $ORACLE_DBSTATUS"
+    , "CDB database role    ! $ORACLE_DBROLE"
     ];
   } else {
     # Refresh Mode is not NONE => is active
@@ -3350,6 +3397,8 @@ sub part_1_pdb {
     , "Refresh interval     ! $my_refresh_int"
     , "CDB instance name    ! $my_cdb_name"
     , "Running on host      ! $my_hostname"
+    , "CDB database status  ! $ORACLE_DBSTATUS"
+    , "CDB database role    ! $ORACLE_DBROLE"
     ];
   }
 
